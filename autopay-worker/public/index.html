@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>meter402 Autopay Authorization</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f4f5f7;
+      color: #111827;
+    }
+    html, body { height: 100%; }
+    body { margin: 0; overflow: hidden; }
+    main {
+      display: flex;
+      flex-direction: column;
+      max-width: 760px;
+      height: 100dvh;
+      margin: 0 auto;
+      padding: 0 16px;
+      box-sizing: border-box;
+    }
+    header { flex: 0 0 auto; padding: 24px 0 14px; }
+    .content {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 0 0 18px;
+      -webkit-overflow-scrolling: touch;
+    }
+    h1 { margin: 0 0 6px; font-size: 26px; line-height: 1.2; letter-spacing: 0; }
+    h2 { margin: 0 0 14px; font-size: 17px; line-height: 1.3; letter-spacing: 0; }
+    p { margin: 0; color: #4b5563; line-height: 1.5; }
+    section { margin-top: 16px; padding: 18px; background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; }
+    button {
+      border: 0;
+      border-radius: 6px;
+      padding: 10px 14px;
+      background: #111827;
+      color: #fff;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button.secondary { background: #e5e7eb; color: #111827; }
+    button.danger { background: #b91c1c; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    button + button { margin-left: 8px; }
+    dl { display: grid; grid-template-columns: minmax(116px, 160px) minmax(0, 1fr); gap: 10px 14px; margin: 0; }
+    dt { color: #6b7280; font-size: 13px; }
+    dd { margin: 0; min-width: 0; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; color: #111827; }
+    textarea {
+      width: 100%;
+      box-sizing: border-box;
+      min-height: 128px;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      padding: 10px 12px;
+      font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      background: #0f172a;
+      color: #e5e7eb;
+      resize: vertical;
+    }
+    .actions {
+      flex: 0 0 auto;
+      display: flex;
+      gap: 10px;
+      padding: 12px 0 max(12px, env(safe-area-inset-bottom));
+      background: #f4f5f7;
+      border-top: 1px solid #e5e7eb;
+    }
+    .actions[hidden] { display: none; }
+    .actions button {
+      flex: 1 1 0;
+      min-height: 46px;
+      margin: 0;
+    }
+    .status { margin-top: 10px; white-space: pre-wrap; color: #374151; font-size: 13px; line-height: 1.45; }
+    .empty { border-style: dashed; }
+    @media (max-width: 620px) {
+      main { padding: 0 12px; }
+      header { padding-top: 20px; }
+      dl { grid-template-columns: 1fr; gap: 4px 0; }
+      dd + dt { margin-top: 8px; }
+      button { width: 100%; }
+      .actions { gap: 8px; }
+      .actions button + button { margin-top: 0; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>meter402 Autopay</h1>
+      <p id="subtitle">Review and sign an autopay authorization with your owner wallet.</p>
+    </header>
+
+    <div class="content">
+      <section id="landingSection" hidden>
+        <h2>Autopay Authorization</h2>
+        <p>Use this page to approve scoped x402 autopay requests with your owner wallet. Start from a payment requester QR code or authorization link.</p>
+      </section>
+
+      <section id="requestSection" hidden>
+        <h2>Request</h2>
+        <dl>
+          <dt>Status</dt><dd id="requestStatus"></dd>
+          <dt>Expires</dt><dd id="expiresAt"></dd>
+          <dt>Network</dt><dd id="network"></dd>
+          <dt>Asset</dt><dd id="asset"></dd>
+          <dt>Max amount</dt><dd id="maxAmount"></dd>
+          <dt>Policy valid before</dt><dd id="validBefore"></dd>
+          <dt>Origins</dt><dd id="origins"></dd>
+          <dt>Recipients</dt><dd id="recipients"></dd>
+          <dt>Payment hash</dt><dd id="paymentHash"></dd>
+        </dl>
+      </section>
+
+      <section id="walletSection" hidden>
+        <h2>Wallet</h2>
+        <dl>
+          <dt>Owner wallet</dt><dd id="ownerWallet">Not connected</dd>
+          <dt>Allowed owners</dt><dd id="allowedOwners">Loading</dd>
+        </dl>
+        <div id="walletStatus" class="status"></div>
+      </section>
+
+      <section id="resultSection" hidden>
+        <h2>Result</h2>
+        <textarea id="result" readonly></textarea>
+      </section>
+    </div>
+
+    <div id="actions" class="actions" hidden>
+      <button id="connectWallet">Connect</button>
+      <button id="approve" disabled hidden>Sign</button>
+      <button id="deny" class="danger" hidden>Deny</button>
+    </div>
+  </main>
+
+  <script type="module">
+    import { SiweMessage } from "https://esm.sh/siwe@3.0.0";
+    import { getAddress } from "https://esm.sh/viem@2.39.2";
+
+    const requestId = new URLSearchParams(location.search).get("request_id") || "";
+    const els = {
+      subtitle: document.getElementById("subtitle"),
+      landingSection: document.getElementById("landingSection"),
+      requestSection: document.getElementById("requestSection"),
+      walletSection: document.getElementById("walletSection"),
+      resultSection: document.getElementById("resultSection"),
+      requestStatus: document.getElementById("requestStatus"),
+      expiresAt: document.getElementById("expiresAt"),
+      network: document.getElementById("network"),
+      asset: document.getElementById("asset"),
+      maxAmount: document.getElementById("maxAmount"),
+      validBefore: document.getElementById("validBefore"),
+      origins: document.getElementById("origins"),
+      recipients: document.getElementById("recipients"),
+      paymentHash: document.getElementById("paymentHash"),
+      ownerWallet: document.getElementById("ownerWallet"),
+      allowedOwners: document.getElementById("allowedOwners"),
+      connectWallet: document.getElementById("connectWallet"),
+      approve: document.getElementById("approve"),
+      deny: document.getElementById("deny"),
+      actions: document.getElementById("actions"),
+      walletStatus: document.getElementById("walletStatus"),
+      result: document.getElementById("result"),
+    };
+
+    let authRequest = null;
+    let allowedOwners = [];
+    let activeProvider = null;
+    let ownerAddress = "";
+
+    els.connectWallet.onclick = () => connectWallet().catch(showError);
+    els.approve.onclick = () => approveAuthorization().catch(showError);
+    els.deny.onclick = () => denyAuthorization().catch(showError);
+
+    init().catch(showError);
+
+    async function init() {
+      if (!requestId) {
+        els.subtitle.textContent = "Approve scoped x402 autopay requests with your owner wallet.";
+        els.landingSection.hidden = false;
+        return;
+      }
+
+      const [details, capabilities] = await Promise.all([
+        fetchJson(`/api/auth/requests/${encodeURIComponent(requestId)}`),
+        fetchJson("/api/capabilities"),
+      ]);
+
+      authRequest = details;
+      allowedOwners = capabilities.allowed_owner_addresses || [];
+      renderRequest(details);
+      els.allowedOwners.textContent = allowedOwners.length ? allowedOwners.join(", ") : "Any valid SIWE signer";
+      els.requestSection.hidden = false;
+      els.walletSection.hidden = false;
+      updateWalletStatus();
+      autoConnectWallet();
+    }
+
+    function renderRequest(details) {
+      const policy = details.policy;
+      els.requestStatus.textContent = details.status;
+      els.expiresAt.textContent = details.expires_at;
+      els.network.textContent = policy.network;
+      els.asset.textContent = policy.asset;
+      els.maxAmount.textContent = policy.maxSingleAmount;
+      els.validBefore.textContent = policy.validBefore;
+      els.origins.textContent = policy.allowedOrigins.join(", ");
+      els.recipients.textContent = policy.allowedPayTo.join(", ");
+      els.paymentHash.textContent = details.payment_requirement_hash || "Not bound";
+    }
+
+    async function autoConnectWallet() {
+      if (!window.ethereum) {
+        updateWalletStatus();
+        return;
+      }
+      try {
+        await connectWallet();
+      } catch (error) {
+        console.info("Automatic wallet connection did not complete.", error);
+        updateWalletStatus();
+      }
+    }
+
+    async function connectWallet() {
+      const provider = window.ethereum;
+      if (!provider) {
+        throw new Error("No injected wallet was found. Open this page in a wallet browser.");
+      }
+      activeProvider = provider;
+      const accounts = await provider.request({ method: "eth_requestAccounts" });
+      ownerAddress = accounts[0] ? getAddress(accounts[0]) : "";
+      els.ownerWallet.textContent = ownerAddress || "Not connected";
+      updateWalletStatus();
+    }
+
+    function updateWalletStatus() {
+      const owner = ownerAddress.toLowerCase();
+      els.actions.hidden = !authRequest;
+      els.connectWallet.hidden = Boolean(owner);
+      els.approve.hidden = !owner;
+      els.deny.hidden = !authRequest;
+      if (!owner) {
+        els.walletStatus.textContent = "Connect an owner wallet to continue.";
+        els.approve.disabled = true;
+        return;
+      }
+      if (allowedOwners.length && !allowedOwners.map((item) => item.toLowerCase()).includes(owner)) {
+        els.walletStatus.textContent = "Connected wallet is not allowed to authorize this worker.";
+        els.approve.disabled = true;
+        return;
+      }
+      els.walletStatus.textContent = "Connected wallet is allowed to sign.";
+      els.approve.disabled = false;
+    }
+
+    async function approveAuthorization() {
+      if (!authRequest) throw new Error("Authorization request was not loaded.");
+      if (!ownerAddress) throw new Error("Connect a wallet first.");
+      els.walletStatus.textContent = "Submitting authorization...";
+
+      const policy = authRequest.policy;
+      const chainId = Number(policy.network.split(":")[1] || "8453");
+      const authorizeUrl = new URL("/authorize", location.origin);
+      authorizeUrl.searchParams.set("request_id", requestId);
+      const checksumOwnerAddress = getAddress(ownerAddress);
+      const siweMessage = new SiweMessage({
+        domain: location.host,
+        address: checksumOwnerAddress,
+        statement: "Authorize meter402 autopay for the listed payment policy.",
+        uri: authorizeUrl.toString(),
+        version: "1",
+        chainId,
+        nonce: authRequest.nonce,
+        issuedAt: new Date().toISOString(),
+        expirationTime: policy.validBefore,
+        resources: authRequest.resources,
+      }).prepareMessage();
+
+      const signature = await personalSign(siweMessage, checksumOwnerAddress);
+      const approved = await fetchJson(`/api/auth/requests/${encodeURIComponent(requestId)}/approve`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          siwe_message: siweMessage,
+          siwe_signature: signature,
+        }),
+      });
+
+      els.result.value = JSON.stringify(approved, null, 2);
+      els.resultSection.hidden = false;
+      els.walletStatus.textContent = "Authorization approved. Return to the requester page.";
+      els.approve.disabled = true;
+    }
+
+    async function denyAuthorization() {
+      if (!requestId) return;
+      const denied = await fetchJson(`/api/auth/requests/${encodeURIComponent(requestId)}/deny`, { method: "POST" });
+      els.result.value = JSON.stringify(denied, null, 2);
+      els.resultSection.hidden = false;
+      els.walletStatus.textContent = "Authorization denied.";
+      els.approve.disabled = true;
+    }
+
+    async function personalSign(message, address) {
+      const provider = activeProvider || window.ethereum;
+      if (!provider) throw new Error("No injected wallet was found.");
+      try {
+        return await provider.request({ method: "personal_sign", params: [message, address] });
+      } catch (error) {
+        return await provider.request({ method: "personal_sign", params: [address, message] });
+      }
+    }
+
+    async function fetchJson(url, init) {
+      const response = await fetch(url, init);
+      const json = await response.json().catch(() => null);
+      if (!response.ok) {
+        const message = json?.error?.message || `Request failed with HTTP ${response.status}.`;
+        throw new Error(message);
+      }
+      return json;
+    }
+
+    function showError(error) {
+      els.walletStatus.textContent = error instanceof Error ? error.message : String(error);
+      els.result.value = error instanceof Error ? error.stack || error.message : String(error);
+      els.resultSection.hidden = false;
+    }
+  </script>
+</body>
+</html>

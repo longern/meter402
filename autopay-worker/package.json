@@ -1,0 +1,25 @@
+{
+  "name": "meter402-autopay-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "requester-demo": "node scripts/requester-demo.mjs",
+    "create-siwe": "node scripts/create-siwe.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@x402/core": "^2.11.0",
+    "@x402/evm": "^2.11.0",
+    "qrcode": "^1.5.4",
+    "siwe": "^3.0.0",
+    "viem": "^2.39.2"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260426.1",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.85.0"
+  }
+}

@@ -1,0 +1,32 @@
+name = "meter402-autopay-worker"
+main = "src/index.ts"
+compatibility_date = "2026-04-28"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+preview_urls = false
+
+routes = [
+  { pattern = "autopay.longern.com", zone_name = "longern.com", custom_domain = true }
+]
+
+[vars]
+# Optional comma-separated owner wallet address allowlist.
+# If empty or omitted, any valid SIWE signer can authorize this payer.
+AUTOPAY_ALLOWED_OWNERS = ""
+
+[[durable_objects.bindings]]
+name = "AUTOPAY_AUTH_SESSIONS"
+class_name = "AutopayAuthSession"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["AutopayAuthSession"]
+
+[assets]
+directory = "./public"
+html_handling = "auto-trailing-slash"
+not_found_handling = "none"
+run_worker_first = ["/authorize", "/api/*"]
+
+# Set secrets with wrangler:
+# wrangler secret put AUTOPAY_PRIVATE_KEY
