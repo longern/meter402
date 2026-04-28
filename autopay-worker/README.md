@@ -43,6 +43,12 @@ Run locally:
 npm run dev -- --port 8788
 ```
 
+Build the React authorization page and type-check the Worker:
+
+```bash
+npm run build
+```
+
 Open:
 
 ```text
@@ -88,7 +94,6 @@ The worker can infer a strict policy from `paymentRequired` by selecting the che
 ```json
 {
   "policy": {
-    "payer": "0xHotWalletAddress",
     "allowedOrigins": ["https://api.example.com"],
     "allowedPayTo": ["0xMerchantReceiver"],
     "network": "eip155:8453",
