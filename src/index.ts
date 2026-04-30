@@ -85,8 +85,9 @@ export default {
       if (request.method === "POST" && url.pathname === "/api/refund") {
         return await handleRefundRequest(request, env);
       }
-      if (request.method === "POST" && url.pathname === "/v1/chat/completions") {
-        return await handleChatCompletions(request, env, ctx);
+      if (request.method === "POST" && url.pathname.startsWith("/v1/")) {
+        const endpoint = url.pathname.slice(4);
+        return await handleV1Request(request, env, ctx, endpoint);
       }
 
       return errorResponse(404, "not_found", "No route matches this request.");
@@ -1239,7 +1240,7 @@ async function handleChatCompletions(request: Request, env: Env, ctx: ExecutionC
   const started = await startMeteredRequest(env, account.id, requestId, String(body.model ?? ""), stream);
   if (started instanceof Response) return started;
 
-  const upstreamRequest = buildAiGatewayRequest(env, body);
+  const upstreamRequest = buildAiGatewayRequest(env, JSON.stringify(body), "chat/completions", "application/json");
   let upstreamResponse: Response;
   try {
     upstreamResponse = await fetch(upstreamRequest);
@@ -1281,6 +1282,98 @@ async function handleChatCompletions(request: Request, env: Env, ctx: ExecutionC
   headers.set("meteria402-amount-due", formatMoney(cost));
 
   return new Response(responseText, {
+    status: upstreamResponse.status,
+    statusText: upstreamResponse.statusText,
+    headers,
+  });
+}
+
+async function handleV1Request(request: Request, env: Env, ctx: ExecutionContext, endpoint: string): Promise<Response> {
+  if (endpoint === "chat/completions") {
+    return handleChatCompletions(request, env, ctx);
+  }
+  return handleGenericV1Endpoint(request, env, endpoint);
+}
+
+async function handleGenericV1Endpoint(request: Request, env: Env, endpoint: string): Promise<Response> {
+  const account = await authenticate(request, env);
+  if (account instanceof Response) return account;
+
+  if (!env.CLOUDFLARE_ACCOUNT_ID) {
+    return errorResponse(500, "missing_ai_gateway_config", "Cloudflare account ID is not configured.");
+  }
+
+  const contentType = request.headers.get("content-type") || "";
+  const isJsonBody = contentType.includes("application/json");
+
+  let bodyJson: Record<string, unknown> | null = null;
+  let upstreamBody: BodyInit;
+
+  if (isJsonBody) {
+    try {
+      const bodyClone = request.clone();
+      bodyJson = await readJsonObject(bodyClone);
+      upstreamBody = JSON.stringify(bodyJson);
+    } catch {
+      upstreamBody = await request.arrayBuffer();
+    }
+  } else {
+    upstreamBody = await request.arrayBuffer();
+  }
+
+  const model = typeof bodyJson?.model === "string" ? bodyJson.model : endpoint;
+  const requestId = makeId("req");
+  const started = await startMeteredRequest(env, account.id, requestId, model, false);
+  if (started instanceof Response) return started;
+
+  const upstreamRequest = buildAiGatewayRequest(env, upstreamBody, endpoint, contentType);
+  let upstreamResponse: Response;
+  try {
+    upstreamResponse = await fetch(upstreamRequest);
+  } catch (error) {
+    await failMeteredRequest(env, account.id, requestId, "upstream_fetch_failed");
+    console.error("AI Gateway request failed", error);
+    return errorResponse(502, "upstream_fetch_failed", "The upstream AI Gateway request failed.");
+  }
+
+  if (!upstreamResponse.ok) {
+    await failMeteredRequest(env, account.id, requestId, `upstream_${upstreamResponse.status}`);
+    return copyResponse(upstreamResponse, { "meteria402-request-id": requestId });
+  }
+
+  const responseContentType = upstreamResponse.headers.get("content-type") || "";
+  const responseIsJson = responseContentType.includes("application/json");
+
+  let usage: Usage | null = null;
+  let responseBody: ArrayBuffer | string;
+
+  if (responseIsJson) {
+    const responseText = await upstreamResponse.text();
+    responseBody = responseText;
+    usage = extractUsageFromText(responseText);
+  } else {
+    responseBody = await upstreamResponse.arrayBuffer();
+  }
+
+  const headers = cloneHeaders(upstreamResponse.headers);
+  headers.set("meteria402-request-id", requestId);
+
+  if (!usage) {
+    await markPendingReconcile(env, account.id, requestId);
+    headers.set("meteria402-reconcile", "pending");
+    return new Response(responseBody, {
+      status: upstreamResponse.status,
+      statusText: upstreamResponse.statusText,
+      headers,
+    });
+  }
+
+  const cost = calculateCost(model, usage, env);
+  const invoice = await settleMeteredRequest(env, account.id, requestId, model, usage, cost, upstreamResponse.headers);
+  headers.set("meteria402-invoice-id", invoice.invoiceId);
+  headers.set("meteria402-amount-due", formatMoney(cost));
+
+  return new Response(responseBody, {
     status: upstreamResponse.status,
     statusText: upstreamResponse.statusText,
     headers,
@@ -1507,11 +1600,13 @@ function proxyStreamingResponse(
   });
 }
 
-function buildAiGatewayRequest(env: Env, body: ChatBody): Request {
+function buildAiGatewayRequest(env: Env, body: BodyInit, endpoint: string, contentType: string | null): Request {
   const gatewayId = env.AI_GATEWAY_ID || "default";
-  const url = `https://gateway.ai.cloudflare.com/v1/${encodeURIComponent(env.CLOUDFLARE_ACCOUNT_ID || "")}/${encodeURIComponent(gatewayId)}/compat/chat/completions`;
+  const url = `https://gateway.ai.cloudflare.com/v1/${encodeURIComponent(env.CLOUDFLARE_ACCOUNT_ID || "")}/${encodeURIComponent(gatewayId)}/compat/${endpoint}`;
   const headers = new Headers();
-  headers.set("content-type", "application/json");
+  if (contentType) {
+    headers.set("content-type", contentType);
+  }
   if (env.AI_GATEWAY_API_KEY) {
     headers.set("authorization", `Bearer ${env.AI_GATEWAY_API_KEY}`);
   }
@@ -1521,7 +1616,7 @@ function buildAiGatewayRequest(env: Env, body: ChatBody): Request {
   return new Request(url, {
     method: "POST",
     headers,
-    body: JSON.stringify(body),
+    body,
   });
 }
 
