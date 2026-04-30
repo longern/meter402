@@ -414,8 +414,7 @@ async function handleDepositAutopayComplete(request: Request, env: Env, paymentI
 }
 
 async function handleGetAccount(request: Request, env: Env): Promise<Response> {
-  const account = await authenticate(request, env);
-  if (account instanceof Response) return account;
+  const account = await requireAccountFromSession(request, env);
 
   return jsonResponse({
     account_id: account.id,
@@ -430,8 +429,7 @@ async function handleGetAccount(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleListApiKeys(request: Request, env: Env): Promise<Response> {
-  const account = await authenticate(request, env);
-  if (account instanceof Response) return account;
+  const account = await requireAccountFromSession(request, env);
 
   const rows = await env.DB.prepare(
     `SELECT id, key_prefix, key_suffix, name, expires_at, created_at, revoked_at
@@ -510,8 +508,7 @@ async function handleListApiKeys(request: Request, env: Env): Promise<Response> 
 }
 
 async function handleCreateApiKey(request: Request, env: Env): Promise<Response> {
-  const account = await authenticate(request, env);
-  if (account instanceof Response) return account;
+  const account = await requireAccountFromSession(request, env);
 
   const body = await readOptionalJsonObject(request);
   const name = normalizeApiKeyName(body.name);
@@ -540,11 +537,7 @@ async function handleCreateApiKey(request: Request, env: Env): Promise<Response>
 }
 
 async function handleRevokeApiKey(request: Request, env: Env, apiKeyId: string): Promise<Response> {
-  const account = await authenticate(request, env);
-  if (account instanceof Response) return account;
-  if (apiKeyId === account.api_key_id) {
-    return errorResponse(409, "cannot_revoke_current_key", "Switch to another API key before revoking the current key.");
-  }
+  const account = await requireAccountFromSession(request, env);
 
   const now = new Date().toISOString();
   const result = await env.DB.prepare(
@@ -567,8 +560,7 @@ async function handleRevokeApiKey(request: Request, env: Env, apiKeyId: string):
 }
 
 async function handleListInvoices(request: Request, env: Env): Promise<Response> {
-  const account = await authenticate(request, env);
-  if (account instanceof Response) return account;
+  const account = await requireAccountFromSession(request, env);
 
   const rows = await env.DB.prepare(
     `SELECT id, request_id, status, amount_due, currency, created_at, paid_at
@@ -597,8 +589,7 @@ async function handleListInvoices(request: Request, env: Env): Promise<Response>
 }
 
 async function handleListRequests(request: Request, env: Env): Promise<Response> {
-  const account = await authenticate(request, env);
-  if (account instanceof Response) return account;
+  const account = await requireAccountFromSession(request, env);
 
   const rows = await env.DB.prepare(
     `SELECT r.id, r.status, r.model, r.stream, r.ai_gateway_log_id,
@@ -656,8 +647,7 @@ async function handleListRequests(request: Request, env: Env): Promise<Response>
 }
 
 async function handleInvoicePayQuote(request: Request, env: Env, invoiceId: string): Promise<Response> {
-  const account = await authenticate(request, env);
-  if (account instanceof Response) return account;
+  const account = await requireAccountFromSession(request, env);
 
   const invoice = await env.DB.prepare(
     `SELECT id, amount_due, status
@@ -700,8 +690,7 @@ async function handleInvoicePayQuote(request: Request, env: Env, invoiceId: stri
 }
 
 async function handleInvoicePaySettle(request: Request, env: Env, invoiceId: string): Promise<Response> {
-  const account = await authenticate(request, env);
-  if (account instanceof Response) return account;
+  const account = await requireAccountFromSession(request, env);
 
   const body = await readJsonObject(request);
   const paymentId = requireString(body.payment_id, "payment_id");
@@ -772,8 +761,7 @@ async function handleInvoicePaySettle(request: Request, env: Env, invoiceId: str
 }
 
 async function handleInvoiceAutopayStart(request: Request, env: Env, invoiceId: string): Promise<Response> {
-  const account = await authenticate(request, env);
-  if (account instanceof Response) return account;
+  const account = await requireAccountFromSession(request, env);
 
   const invoice = await env.DB.prepare(
     `SELECT id, amount_due, status
@@ -818,8 +806,7 @@ async function handleInvoiceAutopayStart(request: Request, env: Env, invoiceId: 
 }
 
 async function handleInvoiceAutopayComplete(request: Request, env: Env, invoiceId: string): Promise<Response> {
-  const account = await authenticate(request, env);
-  if (account instanceof Response) return account;
+  const account = await requireAccountFromSession(request, env);
 
   const body = await readJsonObject(request);
   const paymentId = requireString(body.payment_id, "payment_id");
@@ -1235,8 +1222,7 @@ async function requirePaymentAccountAutopayUrl(env: Env, accountId: string | nul
 }
 
 async function handleRefundRequest(request: Request, env: Env): Promise<Response> {
-  const account = await authenticate(request, env);
-  if (account instanceof Response) return account;
+  const account = await requireAccountFromSession(request, env);
 
   if (account.unpaid_invoice_total > 0) {
     return paymentRequiredResponse("unpaid_invoice", "All unpaid invoices must be paid before a refund can be requested.", {
@@ -1757,6 +1743,18 @@ async function authenticate(request: Request, env: Env): Promise<AuthenticatedAc
     return errorResponse(401, "invalid_api_key", "The API key is invalid.");
   }
   return account;
+}
+
+async function requireAccountFromSession(request: Request, env: Env): Promise<AuthenticatedAccount> {
+  const session = await requireSession(request, env);
+  const account = await getAccountByOwner(env, session.owner);
+  if (!account) {
+    throw new HttpError(401, "account_not_found", "No account found for this session.");
+  }
+  return {
+    ...account,
+    api_key_id: "", // session-authenticated callers don't have a single API key context
+  };
 }
 
 async function getAccount(env: Env, accountId: string): Promise<Account | null> {

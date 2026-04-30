@@ -3,7 +3,6 @@ import { createRoot } from "react-dom/client";
 import QRCode from "qrcode";
 import "./styles.css";
 
-const API_KEY_STORAGE_KEY = "meteria402_console_api_key";
 const AUTOPAY_ENDPOINT_STORAGE_KEY = "meteria402_last_autopay_endpoint";
 const DEFAULT_AUTOPAY_URL = import.meta.env.VITE_DEFAULT_AUTOPAY_URL || "";
 const LOGIN_SUCCESS_REDIRECT_DELAY_MS = 500;
@@ -509,7 +508,6 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
   const [activeView, setActiveView] = useState(() => getConsoleView(window.location.pathname));
   const [autopayUrl, setAutopayUrl] = useState(initialIdentity?.autopay_url || DEFAULT_AUTOPAY_URL);
   const [depositAmount, setDepositAmount] = useState("5.00");
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem(API_KEY_STORAGE_KEY) || "");
   const [newApiKey, setNewApiKey] = useState("");
   const [newKeyName, setNewKeyName] = useState("");
   const [newKeyExpiresAt, setNewKeyExpiresAt] = useState("");
@@ -523,7 +521,6 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
   const [autopayWalletBalanceError, setAutopayWalletBalanceError] = useState("");
   const [account, setAccount] = useState(null);
   const [apiKeys, setApiKeys] = useState([]);
-  const [currentApiKeyId, setCurrentApiKeyId] = useState("");
   const [lastInvoices, setLastInvoices] = useState([]);
   const [requests, setRequests] = useState([]);
   const [output, setOutput] = useState("");
@@ -560,7 +557,6 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
 
   async function request(path, options = {}) {
     const headers = { "content-type": "application/json", ...(options.headers || {}) };
-    if (apiKey.trim()) headers.authorization = `Bearer ${apiKey.trim()}`;
     const response = await fetch(path, { ...options, headers });
     const text = await response.text();
     const json = text ? JSON.parse(text) : null;
@@ -609,7 +605,9 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
           autopay_url: autopayUrl.trim() || undefined,
         }),
       });
-      if (json.api_key) saveApiKey(json.api_key);
+      if (json.api_key) {
+        setNewApiKey(json.api_key);
+      }
       show(json);
     });
   }
@@ -655,7 +653,9 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
         { autopay_state: started.autopay_state },
         started.websocket_uri_complete,
       );
-      if (settled?.settlement?.api_key) saveApiKey(settled.settlement.api_key);
+      if (settled?.settlement?.api_key) {
+        setNewApiKey(settled.settlement.api_key);
+      }
       if (settled?.status === "settled") {
         setPaymentDialog((current) => current ? { ...current, status: "settled", error: "" } : current);
       }
@@ -681,7 +681,6 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
     await withBusy("loadAccount", async () => {
       const json = await request("/api/account");
       setAccount(json);
-      if (json.current_api_key_id) setCurrentApiKeyId(json.current_api_key_id);
       show(json);
     });
   }
@@ -690,7 +689,6 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
     await withBusy("loadApiKeys", async () => {
       const json = await request("/api/api-keys");
       setApiKeys(json.api_keys || []);
-      setCurrentApiKeyId(json.current_api_key_id || "");
       show(json);
     });
   }
@@ -728,14 +726,12 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
         }),
       });
       if (json.api_key) {
-        saveApiKey(json.api_key);
         setNewApiKey(json.api_key);
       }
       setNewKeyName("");
       setNewKeyExpiresAt("");
       const keysJson = await request("/api/api-keys");
       setApiKeys(keysJson.api_keys || []);
-      setCurrentApiKeyId(keysJson.current_api_key_id || "");
     } catch (error) {
       setKeyDialogError(readableError(error));
     } finally {
@@ -878,11 +874,6 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
 
   function closeSidebar() {
     setSidebarOpen(false);
-  }
-
-  function saveApiKey(value) {
-    setApiKey(value);
-    localStorage.setItem(API_KEY_STORAGE_KEY, value);
   }
 
   function navigateConsole(event, item) {
@@ -1049,7 +1040,7 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
                       <div>
                         <strong>{item.name || `${item.prefix}_...${item.key_suffix}`}</strong>
                         <span>
-                          {item.prefix}_...{item.key_suffix} · {item.status}{item.id === currentApiKeyId ? " · current" : ""}
+                          {item.prefix}_...{item.key_suffix} · {item.status}
                           {item.expires_at ? ` · expires ${formatDateTime(item.expires_at)}` : ""}
                         </span>
                         {typeof item.calls === "number" && (
@@ -1075,7 +1066,7 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
                       </div>
                       <button
                         className="secondary danger"
-                        disabled={isBusy || item.status !== "active" || item.id === currentApiKeyId}
+                        disabled={isBusy || item.status !== "active"}
                         onClick={() => revokeApiKey(item.id)}
                       >
                         Revoke
@@ -1129,7 +1120,7 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
                 )}
                 <div className="modal-actions">
                   <button type="button" className="secondary" onClick={closeCreateKeyDialog}>Close</button>
-                  <button type="submit" disabled={busy === "createApiKey" || !apiKey.trim()}>
+                  <button type="submit" disabled={busy === "createApiKey"}>
                     {busy === "createApiKey" ? "Creating..." : "Create key"}
                   </button>
                 </div>
@@ -1194,25 +1185,12 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
           <>
             <section>
               <h2>Account</h2>
-              {apiKey ? (
-                <>
-                  <div className="key-status">
-                    <span>Active key: {maskApiKey(apiKey)}</span>
-                  </div>
-                  <div className="row">
-                    <button disabled={isBusy} onClick={loadAccount}>Load account</button>
-                    <button disabled={isBusy} className="secondary" onClick={loadRequests}>Load calls</button>
-                    <button disabled={isBusy} className="secondary" onClick={loadInvoices}>Load invoices</button>
-                    <button disabled={isBusy} className="secondary" onClick={autopayInvoice}>Pay invoice</button>
-                  </div>
-                </>
-              ) : (
-                <div className="empty-state">
-                  <strong>No active key</strong>
-                  <p>Create a deposit first. Usage records are tied to the generated API key.</p>
-                  <button type="button" onClick={() => navigateConsoleView("recharge")}>Go to Recharge</button>
-                </div>
-              )}
+              <div className="row">
+                <button disabled={isBusy} onClick={loadAccount}>Load account</button>
+                <button disabled={isBusy} className="secondary" onClick={loadRequests}>Load calls</button>
+                <button disabled={isBusy} className="secondary" onClick={loadInvoices}>Load invoices</button>
+                <button disabled={isBusy} className="secondary" onClick={autopayInvoice}>Pay invoice</button>
+              </div>
               {account && (
                 <dl className="summary-grid">
                   <dt>Balance</dt><dd>{account.deposit_balance}</dd>
@@ -1349,12 +1327,6 @@ function shortAddress(value) {
 function shortId(value) {
   if (!value || value.length <= 16) return value || "";
   return `${value.slice(0, 8)}...${value.slice(-4)}`;
-}
-
-function maskApiKey(value) {
-  if (!value) return "";
-  if (value.length <= 18) return value;
-  return `${value.slice(0, 10)}...${value.slice(-4)}`;
 }
 
 function datetimeLocalToIso(value) {
