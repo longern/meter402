@@ -1064,6 +1064,26 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
                           {item.prefix}_...{item.key_suffix} · {item.status}{item.id === currentApiKeyId ? " · current" : ""}
                           {item.expires_at ? ` · expires ${formatDateTime(item.expires_at)}` : ""}
                         </span>
+                        {typeof item.calls === "number" && (
+                          <div className="usage-stats">
+                            <div className="stat-box">
+                              <div className="num">{item.calls.toLocaleString()}</div>
+                              <div className="label">Calls</div>
+                            </div>
+                            <div className="stat-box">
+                              <div className="num">{formatCompactNumber(item.total_tokens || 0)}</div>
+                              <div className="label">Tokens</div>
+                            </div>
+                            <div className="stat-box">
+                              <div className="num">{formatMoneyCompact(item.total_cost || 0)}</div>
+                              <div className="label">Cost</div>
+                            </div>
+                            <div className="stat-box">
+                              <div className="num">{item.calls > 0 ? Math.round(((item.calls - (item.errors || 0)) / item.calls) * 100) : 0}%</div>
+                              <div className="label">Success</div>
+                            </div>
+                          </div>
+                        )}
                       </div>
                       <button
                         className="secondary danger"
@@ -1363,6 +1383,21 @@ function formatDateTime(value) {
   } catch {
     return value;
   }
+}
+
+function formatCompactNumber(value) {
+  const n = Number(value);
+  if (Number.isNaN(n)) return "0";
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
+}
+
+function formatMoneyCompact(microUsd) {
+  const usd = Number(microUsd) / 1_000_000;
+  if (usd >= 1) return `$${usd.toFixed(2)}`;
+  if (usd >= 0.01) return `$${usd.toFixed(3)}`;
+  return `$${usd.toFixed(6)}`;
 }
 
 createRoot(document.getElementById("root")).render(<App />);

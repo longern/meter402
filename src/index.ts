@@ -450,18 +450,62 @@ async function handleListApiKeys(request: Request, env: Env): Promise<Response> 
       revoked_at: string | null;
     }>();
 
+  const keyList = rows.results || [];
+
+  // Aggregate usage stats per key
+  const keyIds = keyList.map((k) => k.id);
+  const statsMap = new Map<string, { calls: number; total_tokens: number; total_cost: number; errors: number }>();
+
+  if (keyIds.length > 0) {
+    const placeholders = keyIds.map(() => "?").join(",");
+    const stats = await env.DB.prepare(
+      `SELECT api_key_id,
+              COUNT(*) AS calls,
+              COALESCE(SUM(total_tokens), 0) AS total_tokens,
+              COALESCE(SUM(final_cost), 0) AS total_cost,
+              COUNT(CASE WHEN status = 'error' OR status = 'pending_reconcile' THEN 1 END) AS errors
+       FROM meteria402_requests
+       WHERE api_key_id IN (${placeholders})
+       GROUP BY api_key_id`
+    )
+      .bind(...keyIds)
+      .all<{
+        api_key_id: string;
+        calls: number;
+        total_tokens: number;
+        total_cost: number;
+        errors: number;
+      }>();
+
+    for (const row of stats.results || []) {
+      statsMap.set(row.api_key_id, {
+        calls: Number(row.calls),
+        total_tokens: Number(row.total_tokens),
+        total_cost: Number(row.total_cost),
+        errors: Number(row.errors),
+      });
+    }
+  }
+
   return jsonResponse({
     current_api_key_id: account.api_key_id,
-    api_keys: rows.results.map((row) => ({
-      id: row.id,
-      name: row.name || "Unnamed key",
-      prefix: row.key_prefix,
-      key_suffix: row.key_suffix,
-      status: keyStatus(row.revoked_at, row.expires_at),
-      expires_at: row.expires_at,
-      created_at: row.created_at,
-      revoked_at: row.revoked_at,
-    })),
+    api_keys: keyList.map((row) => {
+      const stats = statsMap.get(row.id) || { calls: 0, total_tokens: 0, total_cost: 0, errors: 0 };
+      return {
+        id: row.id,
+        name: row.name || "Unnamed key",
+        prefix: row.key_prefix,
+        key_suffix: row.key_suffix,
+        status: keyStatus(row.revoked_at, row.expires_at),
+        expires_at: row.expires_at,
+        created_at: row.created_at,
+        revoked_at: row.revoked_at,
+        calls: stats.calls,
+        total_tokens: stats.total_tokens,
+        total_cost: stats.total_cost,
+        errors: stats.errors,
+      };
+    }),
   });
 }
 
@@ -1237,7 +1281,7 @@ async function handleChatCompletions(request: Request, env: Env, ctx: ExecutionC
   }
 
   const requestId = makeId("req");
-  const started = await startMeteredRequest(env, account.id, requestId, String(body.model ?? ""), stream);
+  const started = await startMeteredRequest(env, account.id, account.api_key_id, requestId, String(body.model ?? ""), stream);
   if (started instanceof Response) return started;
 
   const upstreamRequest = buildAiGatewayRequest(env, JSON.stringify(body), "chat/completions", "application/json");
@@ -1323,7 +1367,7 @@ async function handleGenericV1Endpoint(request: Request, env: Env, endpoint: str
 
   const model = typeof bodyJson?.model === "string" ? bodyJson.model : endpoint;
   const requestId = makeId("req");
-  const started = await startMeteredRequest(env, account.id, requestId, model, false);
+  const started = await startMeteredRequest(env, account.id, account.api_key_id, requestId, model, false);
   if (started instanceof Response) return started;
 
   const upstreamRequest = buildAiGatewayRequest(env, upstreamBody, endpoint, contentType);
@@ -1383,6 +1427,7 @@ async function handleGenericV1Endpoint(request: Request, env: Env, endpoint: str
 async function startMeteredRequest(
   env: Env,
   accountId: string,
+  apiKeyId: string,
   requestId: string,
   model: string,
   stream: boolean,
@@ -1425,10 +1470,10 @@ async function startMeteredRequest(
 
   try {
     await env.DB.prepare(
-      `INSERT INTO meteria402_requests (id, account_id, status, model, stream, started_at)
-       VALUES (?, ?, 'running', ?, ?, ?)`
+      `INSERT INTO meteria402_requests (id, account_id, api_key_id, status, model, stream, started_at)
+       VALUES (?, ?, ?, 'running', ?, ?, ?)`
     )
-      .bind(requestId, accountId, model || null, stream ? 1 : 0, now)
+      .bind(requestId, accountId, apiKeyId, model || null, stream ? 1 : 0, now)
       .run();
   } catch (error) {
     await decrementActiveRequest(env, accountId);
