@@ -1,13 +1,13 @@
-# meter402
+# Meteria402
 
-`meter402` is a Cloudflare Workers starter for anonymous, deposit-backed, OpenAI-compatible AI API billing with x402 payments.
+`Meteria402` is a Cloudflare Workers starter for anonymous, deposit-backed, OpenAI-compatible AI API billing with x402 payments.
 
 The intended flow is:
 
 ```text
 Client / OpenAI SDK
   -> /v1/chat/completions
-  -> meter402 account and invoice checks
+  -> Meteria402 account and invoice checks
   -> Cloudflare AI Gateway Unified API
   -> usage-based invoice creation
   -> x402 invoice payment before the next request
@@ -23,6 +23,7 @@ This implementation includes:
 - OpenAI-compatible `/v1/chat/completions` proxying through Cloudflare AI Gateway.
 - Usage-based invoice creation after successful requests.
 - Blocking of new model requests when an unpaid invoice exists.
+- Optional payment-worker integration for deposit and invoice settlement.
 - A minimal same-origin `/console` page for deposit setup and account inspection.
 
 This version intentionally keeps Durable Objects out of the MVP. D1 is the source of truth, with conditional updates used for request gating.
@@ -62,7 +63,7 @@ npm install
 Create a D1 database:
 
 ```bash
-wrangler d1 create meter402
+wrangler d1 create meteria402
 ```
 
 Copy the returned database ID into `wrangler.toml`, then apply migrations:
@@ -77,6 +78,7 @@ Set required secrets:
 wrangler secret put CLOUDFLARE_ACCOUNT_ID
 wrangler secret put AI_GATEWAY_API_KEY
 wrangler secret put X402_RECIPIENT_ADDRESS
+wrangler secret put APP_SIGNING_SECRET
 ```
 
 For a gateway that requires Cloudflare AI Gateway authentication, also set:
@@ -85,11 +87,19 @@ For a gateway that requires Cloudflare AI Gateway authentication, also set:
 wrangler secret put AI_GATEWAY_AUTH_TOKEN
 ```
 
+To prefill `/console` with a default payment worker URL at frontend build time, set:
+
+```bash
+export VITE_DEFAULT_AUTOPAY_URL="https://autopay.example.com"
+```
+
 Run locally:
 
 ```bash
 npm run dev
 ```
+
+`npm run dev` and `npm run deploy` build the React console into `dist/client` before starting or deploying the Worker. API routes still run through the Worker, while `/console` is served as a single-page app.
 
 Open:
 
@@ -124,6 +134,9 @@ Content-Type: application/json
 { "amount": "5.00" }
 ```
 
+The response includes a signed `quote_token`; the Worker does not write the quote
+to D1 until settlement succeeds.
+
 Settle a deposit:
 
 ```http
@@ -132,6 +145,7 @@ Content-Type: application/json
 
 {
   "payment_id": "pay_xxx",
+  "quote_token": "eyJ...",
   "payment_payload": {}
 }
 ```
@@ -142,7 +156,7 @@ Use the generated API key with any OpenAI-compatible client:
 import OpenAI from "openai";
 
 const client = new OpenAI({
-  apiKey: "meter402_xxx",
+  apiKey: "meteria402_xxx",
   baseURL: "https://your-worker.example.com/v1",
 });
 

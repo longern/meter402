@@ -1,0 +1,42 @@
+name = "meteria402"
+main = "src/index.ts"
+compatibility_date = "2026-04-28"
+
+routes = [
+  { pattern = "meteria402.longern.com", zone_name = "longern.com", custom_domain = true }
+]
+
+[assets]
+directory = "./dist/client"
+html_handling = "auto-trailing-slash"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*", "/v1/*", "/health"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "meteria402"
+database_id = "<your-d1-database-id>"
+migrations_dir = "migrations"
+
+[observability.logs]
+enabled = true
+
+[vars]
+AI_GATEWAY_ID = "default"
+X402_FACILITATOR_URL = "https://api.cdp.coinbase.com/platform/v2/x402"
+X402_NETWORK = "eip155:8453"
+X402_ASSET = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+X402_ASSET_DECIMALS = "6"
+DEFAULT_MIN_DEPOSIT = "5.00"
+DEFAULT_CONCURRENCY_LIMIT = "1"
+DEFAULT_INPUT_MICRO_USD_PER_TOKEN = "1"
+DEFAULT_OUTPUT_MICRO_USD_PER_TOKEN = "4"
+ALLOW_DEV_PAYMENTS = "false"
+
+# Set secrets with wrangler:
+# wrangler secret put CLOUDFLARE_ACCOUNT_ID
+# wrangler secret put AI_GATEWAY_API_KEY
+# wrangler secret put AI_GATEWAY_AUTH_TOKEN
+# wrangler secret put X402_RECIPIENT_ADDRESS
+# wrangler secret put X402_FACILITATOR_AUTH_TOKEN
+# wrangler secret put APP_SIGNING_SECRET

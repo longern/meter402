@@ -1,5 +1,5 @@
 {
-  "name": "meteria402-autopay-worker",
+  "name": "meteria402",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -8,18 +8,10 @@
     "deploy": "npm run build:frontend && wrangler deploy",
     "build": "npm run build:frontend && npm run typecheck",
     "build:frontend": "vite build",
-    "requester-demo": "node scripts/requester-demo.mjs",
-    "create-siwe": "node scripts/create-siwe.mjs",
-    "typecheck": "tsc --noEmit"
-  },
-  "dependencies": {
-    "@x402/core": "^2.11.0",
-    "@x402/evm": "^2.11.0",
-    "qrcode": "^1.5.4",
-    "react": "^19.2.5",
-    "react-dom": "^19.2.5",
-    "siwe": "^3.0.0",
-    "viem": "^2.39.2"
+    "mock:facilitator": "node scripts/mock-facilitator.mjs",
+    "typecheck": "tsc --noEmit",
+    "db:migrate:local": "wrangler d1 migrations apply meteria402 --local",
+    "db:migrate:remote": "wrangler d1 migrations apply meteria402 --remote"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260426.1",
@@ -27,5 +19,10 @@
     "typescript": "^5.9.3",
     "vite": "^8.0.10",
     "wrangler": "^4.85.0"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5"
   }
 }

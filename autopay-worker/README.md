@@ -1,4 +1,4 @@
-# meter402-autopay-worker
+# Meteria402 Autopay Worker
 
 Self-hosted x402 buyer worker with cross-device SIWE authorization.
 

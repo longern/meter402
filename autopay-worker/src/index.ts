@@ -7,8 +7,14 @@ import { privateKeyToAccount } from "viem/accounts";
 
 type Env = {
   AUTOPAY_PRIVATE_KEY?: string;
+  AUTOPAY_WALLETS?: string;
   AUTOPAY_ALLOWED_OWNERS?: string;
   AUTOPAY_AUTH_SESSIONS: DurableObjectNamespace;
+};
+
+type PayerWallet = {
+  privateKey: Hex;
+  ownerAddresses: Address[];
 };
 
 type AutopayCapability = {
@@ -37,11 +43,14 @@ type ProxyBody = AuthorizationInput & {
 type AuthRequestRecord = {
   requestId: string;
   pollToken: string;
+  eventToken: string;
   status: "pending" | "approved" | "denied";
+  kind: "payment" | "login";
   workerOrigin: string;
-  policy: AutopayCapability;
+  policy?: AutopayCapability;
   paymentRequirementHash?: string;
   returnOrigin?: string;
+  network?: Network;
   nonce: string;
   createdAt: string;
   expiresAt: string;
@@ -62,11 +71,13 @@ const CORS_HEADERS = {
   "access-control-expose-headers": "x-payment-response",
 };
 
-const CAPABILITY_PREFIX = "urn:meter402:autopay:v1:";
-const AUTH_REQUEST_PREFIX = "urn:meter402:auth-request:";
-const PAYMENT_REQUIREMENT_PREFIX = "urn:meter402:payment-requirement:";
+const CAPABILITY_PREFIX = "urn:meteria402:autopay:v1:";
+const AUTH_REQUEST_PREFIX = "urn:meteria402:auth-request:";
+const PAYMENT_REQUIREMENT_PREFIX = "urn:meteria402:payment-requirement:";
+const LOGIN_PREFIX = "urn:meteria402:login:";
 const DEFAULT_AUTH_TTL_SECONDS = 5 * 60;
 const MAX_AUTH_TTL_SECONDS = 30 * 60;
+const DEFAULT_NETWORK = "eip155:8453" as Network;
 
 export class AutopayAuthSession implements DurableObject {
   constructor(
@@ -114,13 +125,34 @@ export class AutopayAuthSession implements DurableObject {
             siwe_signature: record.siweSignature,
             owner: record.owner,
             capability: record.policy,
+            kind: record.kind,
           },
         });
+      }
+
+      if (request.method === "GET" && url.pathname === "/events") {
+        if (request.headers.get("Upgrade") !== "websocket") {
+          throw new HttpError(426, "websocket_required", "WebSocket upgrade is required.");
+        }
+        const eventToken = url.searchParams.get("event_token") || "";
+        if (!eventToken || eventToken !== record.eventToken) {
+          throw new HttpError(403, "invalid_event_token", "Event token is invalid.");
+        }
+
+        const pair = new WebSocketPair();
+        const [client, server] = Object.values(pair);
+        this.ctx.acceptWebSocket(server);
+        server.send(JSON.stringify(authRequestEvent(record)));
+        if (record.status !== "pending") {
+          server.close(1000, record.status);
+        }
+        return new Response(null, { status: 101, webSocket: client });
       }
 
       if (request.method === "POST" && url.pathname === "/deny") {
         record.status = "denied";
         await this.ctx.storage.put("record", record);
+        this.broadcastEvent(record);
         return jsonResponse({ status: record.status });
       }
 
@@ -131,14 +163,23 @@ export class AutopayAuthSession implements DurableObject {
         const body = await readJsonObject(request);
         const authorization = await verifyAuthorization(request, this.env, body, {
           expectedOrigin: record.workerOrigin,
+          requireCapability: record.kind === "payment",
         });
         if (authorization.authRequestId !== record.requestId) {
           throw new HttpError(403, "auth_request_mismatch", "SIWE authorization is not bound to this request.");
         }
-        if (record.paymentRequirementHash && authorization.paymentRequirementHash !== record.paymentRequirementHash) {
+        if (record.kind === "login") {
+          if (authorization.loginRequestId !== record.requestId) {
+            throw new HttpError(403, "login_request_mismatch", "SIWE authorization is not bound to this login request.");
+          }
+          if (chainIdFromNetwork(record.network ?? DEFAULT_NETWORK) !== authorization.siwe.chainId) {
+            throw new HttpError(403, "siwe_chain_mismatch", "SIWE chain ID does not match the requested login network.");
+          }
+        }
+        if (record.kind === "payment" && record.paymentRequirementHash && authorization.paymentRequirementHash !== record.paymentRequirementHash) {
           throw new HttpError(403, "payment_requirement_hash_mismatch", "SIWE authorization is not bound to the requested payment requirement.");
         }
-        if (!sameCapability(authorization.capability, record.policy)) {
+        if (record.kind === "payment" && (!authorization.capability || !record.policy || !sameCapability(authorization.capability, record.policy))) {
           throw new HttpError(403, "policy_mismatch", "SIWE authorization does not match the requested policy.");
         }
         if (authorization.siwe.nonce !== record.nonce) {
@@ -151,6 +192,7 @@ export class AutopayAuthSession implements DurableObject {
         record.siweSignature = requireString(body.siweSignature ?? body.siwe_signature, "siwe_signature");
         record.owner = authorization.owner;
         await this.ctx.storage.put("record", record);
+        this.broadcastEvent(record);
 
         return jsonResponse({
           status: record.status,
@@ -169,6 +211,10 @@ export class AutopayAuthSession implements DurableObject {
   }
 
   async alarm(): Promise<void> {
+    const record = await this.ctx.storage.get<AuthRequestRecord>("record");
+    if (record && record.status === "pending") {
+      this.broadcastEvent(record, "expired");
+    }
     await this.ctx.storage.deleteAll();
   }
 
@@ -178,6 +224,20 @@ export class AutopayAuthSession implements DurableObject {
       throw new HttpError(404, "auth_request_not_found", "Authorization request was not found.");
     }
     return record;
+  }
+
+  private broadcastEvent(record: AuthRequestRecord, status: "pending" | "approved" | "denied" | "expired" = record.status): void {
+    const message = JSON.stringify(authRequestEvent(record, status));
+    for (const ws of this.ctx.getWebSockets()) {
+      try {
+        ws.send(message);
+        if (status !== "pending") {
+          ws.close(1000, status);
+        }
+      } catch (error) {
+        console.warn("Failed to send auth request event", error);
+      }
+    }
   }
 }
 
@@ -190,7 +250,7 @@ export default {
 
       const url = new URL(request.url);
       if (request.method === "GET" && url.pathname === "/api/health") {
-        return jsonResponse({ ok: true, service: "meter402-autopay-worker" });
+        return jsonResponse({ ok: true, service: "meteria402-autopay-worker" });
       }
 
       if ((request.method === "GET" || request.method === "HEAD") && url.pathname === "/authorize") {
@@ -202,14 +262,18 @@ export default {
       }
 
       if (request.method === "GET" && url.pathname === "/api/capabilities") {
+        const requestedOwner = parseOptionalAddress(url.searchParams.get("owner"));
+        const payerWallet = requestedOwner ? getPayerWalletForOwner(env, requestedOwner) : getDefaultPayerWallet(env);
         return jsonResponse({
           authorization: "siwe_device_flow",
           capability_resource_prefix: CAPABILITY_PREFIX,
           auth_request_resource_prefix: AUTH_REQUEST_PREFIX,
           payment_requirement_resource_prefix: PAYMENT_REQUIREMENT_PREFIX,
+          login_resource_prefix: LOGIN_PREFIX,
           x402_networks: ["eip155:8453"],
           allowed_owner_addresses: getAllowedOwners(env),
-          payer_address: privateKeyToAccount(requirePrivateKey(env)).address,
+          payer_address: payerWallet ? privateKeyToAccount(payerWallet.privateKey).address : null,
+          payer_wallets: listPayerWallets(env),
           storage: "durable_object",
         });
       }
@@ -218,7 +282,7 @@ export default {
         return await handleCreateAuthRequest(request, env);
       }
 
-      const authRequestMatch = url.pathname.match(/^\/api\/auth\/requests\/([^/]+)(?:\/(details|poll|approve|deny))?$/);
+      const authRequestMatch = url.pathname.match(/^\/api\/auth\/requests\/([^/]+)(?:\/(details|poll|events|approve|deny))?$/);
       if (authRequestMatch) {
         const requestId = authRequestMatch[1];
         const action = authRequestMatch[2] ?? "details";
@@ -247,11 +311,13 @@ export default {
 async function handleCreateAuthRequest(request: Request, env: Env): Promise<Response> {
   const body = await readJsonObject(request);
   const requestUrl = new URL(request.url);
+  const publicOrigin = requestUrl.origin;
+  const kind = body.kind === "login" || body.purpose === "login" ? "login" : "payment";
   const paymentRequiredInput = body.paymentRequired ?? body.payment_required;
   const paymentRequired = paymentRequiredInput == null ? undefined : normalizePaymentRequired(paymentRequiredInput);
-  const paymentRequirementHash = typeof body.paymentRequirementHash === "string"
+  const paymentRequirementHash = kind === "payment" && typeof body.paymentRequirementHash === "string"
     ? normalizeHash(body.paymentRequirementHash)
-    : typeof body.payment_requirement_hash === "string"
+    : kind === "payment" && typeof body.payment_requirement_hash === "string"
       ? normalizeHash(body.payment_requirement_hash)
       : paymentRequired
         ? await hashJson(paymentRequired)
@@ -261,23 +327,32 @@ async function handleCreateAuthRequest(request: Request, env: Env): Promise<Resp
   const ttlSeconds = normalizeTtlSeconds(body.ttlSeconds ?? body.ttl_seconds);
   const requestId = env.AUTOPAY_AUTH_SESSIONS.newUniqueId().toString();
   const pollToken = randomToken(32);
+  const eventToken = randomToken(32);
   const now = new Date();
   const expiresAt = new Date(now.getTime() + ttlSeconds * 1000);
   const policyValidBefore = normalizeValidBefore(body.policyValidBefore ?? body.policy_valid_before ?? body.validBefore ?? body.valid_before, expiresAt);
 
-  const policy = normalizeCapability(body.policy ?? inferPolicyFromPaymentRequirement(env, paymentRequired, policyValidBefore), policyValidBefore);
-  if (paymentRequirementHash) {
+  const policy = kind === "payment"
+    ? normalizeCapability(body.policy ?? inferPolicyFromPaymentRequirement(env, paymentRequired, policyValidBefore), policyValidBefore)
+    : undefined;
+  if (kind === "payment" && paymentRequirementHash) {
+    if (!policy) {
+      throw new HttpError(400, "missing_policy", "Payment authorization requires a policy.");
+    }
     validateCapabilityAllowsPayment(policy, paymentRequired);
   }
 
   const record: AuthRequestRecord = {
     requestId,
     pollToken,
+    eventToken,
     status: "pending",
-    workerOrigin: requestUrl.origin,
+    kind,
+    workerOrigin: publicOrigin,
     policy,
     paymentRequirementHash,
     returnOrigin,
+    network: kind === "login" ? normalizeNetwork(body.network) : undefined,
     nonce: randomSiweNonce(),
     createdAt: now.toISOString(),
     expiresAt: expiresAt.toISOString(),
@@ -290,16 +365,21 @@ async function handleCreateAuthRequest(request: Request, env: Env): Promise<Resp
     body: JSON.stringify(record),
   });
 
-  const verification = new URL("/authorize", requestUrl.origin);
+  const verification = new URL("/authorize", publicOrigin);
   verification.searchParams.set("request_id", requestId);
+  const websocket = new URL(`/api/auth/requests/${encodeURIComponent(requestId)}/events`, publicOrigin);
+  websocket.protocol = websocket.protocol === "https:" ? "wss:" : "ws:";
+  websocket.searchParams.set("event_token", eventToken);
 
   return jsonResponse({
     request_id: requestId,
     poll_token: pollToken,
-    verification_uri: `${requestUrl.origin}/authorize`,
+    websocket_uri_complete: websocket.toString(),
+    verification_uri: `${publicOrigin}/authorize`,
     verification_uri_complete: verification.toString(),
     expires_in: ttlSeconds,
     interval: 2,
+    kind,
     payment_requirement_hash: paymentRequirementHash,
   }, { status: 201 });
 }
@@ -310,6 +390,18 @@ async function forwardAuthSession(env: Env, requestId: string, action: string, r
   sessionUrl.search = url.search;
   const forwarded = new Request(sessionUrl, request);
   return sessionStub(env, requestId).fetch(forwarded);
+}
+
+function authRequestEvent(record: AuthRequestRecord, status: "pending" | "approved" | "denied" | "expired" = record.status): Record<string, unknown> {
+  return {
+    type: "auth_request.status",
+    request_id: record.requestId,
+    status,
+    kind: record.kind,
+    expires_at: record.expiresAt,
+    approved_at: record.approvedAt,
+    owner: record.status === "approved" ? record.owner : undefined,
+  };
 }
 
 function sessionStub(env: Env, requestId: string): DurableObjectStub {
@@ -386,15 +478,18 @@ async function createPayment(
       throw new HttpError(403, "payment_requirement_hash_mismatch", "Payment requirement does not match the SIWE authorization.");
     }
   }
+  if (!authorization.capability) {
+    throw new HttpError(403, "missing_autopay_capability", "Payment authorization must include an autopay capability.");
+  }
 
-  const privateKey = requirePrivateKey(env);
+  const payerWallet = getPayerWalletForOwner(env, authorization.owner);
   const selectedRequirement = selectRequirement(paymentRequired, authorization.capability);
   const filteredPaymentRequired: PaymentRequired = {
     ...paymentRequired,
     accepts: [selectedRequirement],
   };
 
-  const signer = privateKeyToAccount(privateKey);
+  const signer = privateKeyToAccount(payerWallet.privateKey);
   const client = new x402Client();
   registerExactEvmScheme(client, {
     signer,
@@ -420,13 +515,15 @@ async function createPayment(
 type VerifiedAuthorization = {
   owner: Address;
   siwe: SiweMessage;
-  capability: AutopayCapability;
+  capability?: AutopayCapability;
   authRequestId?: string;
   paymentRequirementHash?: string;
+  loginRequestId?: string;
 };
 
 type VerifyAuthorizationOptions = {
   expectedOrigin?: string;
+  requireCapability?: boolean;
 };
 
 async function verifyAuthorization(
@@ -480,12 +577,13 @@ async function verifyAuthorization(
     throw new HttpError(403, "invalid_siwe_signature", "SIWE signature is invalid.");
   }
 
-  const capability = extractCapability(parsed);
-  validateCapabilityTime(capability, now);
-
-  const expectedChainId = chainIdFromNetwork(capability.network);
-  if (expectedChainId !== parsed.chainId) {
-    throw new HttpError(403, "siwe_chain_mismatch", "SIWE chain ID does not match the capability network.");
+  const capability = options.requireCapability === false ? extractOptionalCapability(parsed) : extractCapability(parsed);
+  if (capability) {
+    validateCapabilityTime(capability, now);
+    const expectedChainId = chainIdFromNetwork(capability.network);
+    if (expectedChainId !== parsed.chainId) {
+      throw new HttpError(403, "siwe_chain_mismatch", "SIWE chain ID does not match the capability network.");
+    }
   }
 
   return {
@@ -494,6 +592,7 @@ async function verifyAuthorization(
     capability,
     authRequestId: extractResourceValue(parsed, AUTH_REQUEST_PREFIX),
     paymentRequirementHash: extractResourceValue(parsed, PAYMENT_REQUIREMENT_PREFIX),
+    loginRequestId: extractResourceValue(parsed, LOGIN_PREFIX),
   };
 }
 
@@ -512,6 +611,12 @@ function extractCapability(siwe: SiweMessage): AutopayCapability {
   }
 
   return normalizeCapability(parsed);
+}
+
+function extractOptionalCapability(siwe: SiweMessage): AutopayCapability | undefined {
+  return (siwe.resources ?? []).some((item) => item.startsWith(CAPABILITY_PREFIX))
+    ? extractCapability(siwe)
+    : undefined;
 }
 
 function normalizeCapability(value: unknown, defaultValidBefore?: string): AutopayCapability {
@@ -664,9 +769,11 @@ function publicAuthRecord(record: AuthRequestRecord): Record<string, unknown> {
   return {
     request_id: record.requestId,
     status: record.status,
+    kind: record.kind,
     policy: record.policy,
     payment_requirement_hash: record.paymentRequirementHash,
     return_origin: record.returnOrigin,
+    network: record.network,
     nonce: record.nonce,
     created_at: record.createdAt,
     expires_at: record.expiresAt,
@@ -675,14 +782,26 @@ function publicAuthRecord(record: AuthRequestRecord): Record<string, unknown> {
 }
 
 function resourcesForRecord(record: AuthRequestRecord): string[] {
-  const resources = [
-    CAPABILITY_PREFIX + base64UrlEncode(JSON.stringify(record.policy)),
-    AUTH_REQUEST_PREFIX + record.requestId,
-  ];
+  const resources = [AUTH_REQUEST_PREFIX + record.requestId];
+  if (record.kind === "login") {
+    resources.unshift(LOGIN_PREFIX + record.requestId);
+    return resources;
+  }
+  if (!record.policy) {
+    throw new HttpError(500, "invalid_auth_record", "Payment authorization record is missing policy.");
+  }
+  resources.unshift(CAPABILITY_PREFIX + base64UrlEncode(JSON.stringify(record.policy)));
   if (record.paymentRequirementHash) {
     resources.push(PAYMENT_REQUIREMENT_PREFIX + record.paymentRequirementHash);
   }
   return resources;
+}
+
+function normalizeNetwork(value: unknown): Network {
+  if (value == null || value === "") return DEFAULT_NETWORK;
+  const network = requireString(value, "network") as Network;
+  chainIdFromNetwork(network);
+  return network;
 }
 
 function normalizeOptionalOrigin(value: unknown): string | undefined {
@@ -819,6 +938,94 @@ function requirePrivateKey(env: Env): Hex {
     throw new HttpError(500, "missing_private_key", "AUTOPAY_PRIVATE_KEY is not configured.");
   }
   return key as Hex;
+}
+
+function getPayerWalletForOwner(env: Env, owner: Address): PayerWallet {
+  const wallets = getConfiguredPayerWallets(env);
+  const ownerKey = normalizeAddress(owner);
+  const matches = wallets.filter((wallet) => {
+    if (wallet.ownerAddresses.length === 0) return wallets.length === 1;
+    return wallet.ownerAddresses.map(normalizeAddress).includes(ownerKey);
+  });
+  if (matches.length === 1) return matches[0];
+  if (matches.length > 1) {
+    throw new HttpError(500, "ambiguous_payer_wallet", "Multiple payer wallets are configured for this owner.");
+  }
+  throw new HttpError(403, "payer_wallet_not_found", "No payer wallet is configured for this owner.");
+}
+
+function getDefaultPayerWallet(env: Env): PayerWallet | null {
+  const wallets = getConfiguredPayerWallets(env);
+  return wallets.length === 1 ? wallets[0] : null;
+}
+
+function listPayerWallets(env: Env): Array<{ address: Address; owner_addresses: Address[] }> {
+  return getConfiguredPayerWallets(env).map((wallet) => ({
+    address: privateKeyToAccount(wallet.privateKey).address,
+    owner_addresses: wallet.ownerAddresses,
+  }));
+}
+
+function getConfiguredPayerWallets(env: Env): PayerWallet[] {
+  if (env.AUTOPAY_WALLETS?.trim()) {
+    const parsed = parseAutopayWallets(env.AUTOPAY_WALLETS);
+    if (parsed.length > 0) return parsed;
+  }
+  return [{
+    privateKey: requirePrivateKey(env),
+    ownerAddresses: getAllowedOwners(env),
+  }];
+}
+
+function parseAutopayWallets(value: string): PayerWallet[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new HttpError(500, "invalid_autopay_wallets", "AUTOPAY_WALLETS must be valid JSON.");
+  }
+  if (!Array.isArray(parsed)) {
+    throw new HttpError(500, "invalid_autopay_wallets", "AUTOPAY_WALLETS must be a JSON array.");
+  }
+  return parsed.map((item) => {
+    if (!item || typeof item !== "object") {
+      throw new HttpError(500, "invalid_autopay_wallets", "Each AUTOPAY_WALLETS entry must be an object.");
+    }
+    const input = item as Record<string, unknown>;
+    const privateKey = normalizePrivateKey(input.privateKey ?? input.private_key);
+    const ownerInput = input.ownerAddresses ?? input.owner_addresses ?? input.ownerAddress ?? input.owner_address ?? [];
+    const ownerValues = Array.isArray(ownerInput) ? ownerInput : ownerInput ? [ownerInput] : [];
+    return {
+      privateKey,
+      ownerAddresses: ownerValues.map((owner) => parseConfigAddress(owner, "owner_address")),
+    };
+  });
+}
+
+function normalizePrivateKey(value: unknown): Hex {
+  if (typeof value !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(value)) {
+    throw new HttpError(500, "invalid_autopay_wallets", "Each AUTOPAY_WALLETS privateKey must be a valid EVM private key.");
+  }
+  return value as Hex;
+}
+
+function parseOptionalAddress(value: unknown): Address | null {
+  if (value == null || value === "") return null;
+  return parseAddress(value, "owner");
+}
+
+function parseAddress(value: unknown, field: string): Address {
+  if (typeof value !== "string" || !/^0x[a-fA-F0-9]{40}$/.test(value)) {
+    throw new HttpError(400, "invalid_address", `${field} must be a valid EVM address.`);
+  }
+  return getAddress(value);
+}
+
+function parseConfigAddress(value: unknown, field: string): Address {
+  if (typeof value !== "string" || !/^0x[a-fA-F0-9]{40}$/.test(value)) {
+    throw new HttpError(500, "invalid_autopay_wallets", `Each AUTOPAY_WALLETS ${field} must be a valid EVM address.`);
+  }
+  return getAddress(value);
 }
 
 function requireString(value: unknown, field: string): string {

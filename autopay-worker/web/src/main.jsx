@@ -11,6 +11,7 @@ function App() {
   const [activeProvider, setActiveProvider] = useState(null);
   const [walletStatus, setWalletStatus] = useState("");
   const [result, setResult] = useState("");
+  const [approvedAt, setApprovedAt] = useState("");
   const [busy, setBusy] = useState(false);
 
   const ownerAllowed = useMemo(() => {
@@ -104,8 +105,10 @@ function App() {
         }),
       });
 
-      setResult(JSON.stringify(approved, null, 2));
-      setWalletStatus("Authorization approved. Return to the requester page.");
+      const approvedStatus = approved.status === "approved" ? "approved" : approved.status || "approved";
+      setResult(approvedStatus);
+      if (approvedStatus === "approved") setApprovedAt(new Date().toISOString());
+      setWalletStatus(isLogin ? "Login approved. Return to Meteria402." : "Authorization approved. Return to the requester page.");
     } finally {
       setBusy(false);
     }
@@ -116,7 +119,7 @@ function App() {
     setBusy(true);
     try {
       const denied = await fetchJson(`/api/auth/requests/${encodeURIComponent(requestId)}/deny`, { method: "POST" });
-      setResult(JSON.stringify(denied, null, 2));
+      setResult(denied.status === "denied" ? "denied" : denied.status || "denied");
       setWalletStatus("Authorization denied.");
     } finally {
       setBusy(false);
@@ -124,33 +127,93 @@ function App() {
   }
 
   function showError(error) {
-    const message = error instanceof Error ? error.message : String(error);
-    setWalletStatus(message);
-    setResult(error instanceof Error ? error.stack || error.message : String(error));
+    setWalletStatus(readableErrorMessage(error));
+    setResult(isUserRejectedRequest(error) ? "" : "error");
     setBusy(false);
   }
 
   const policy = authRequest?.policy;
+  const isLogin = authRequest?.kind === "login";
+  const loginApproved = isLogin && result === "approved";
+  const authPage = Boolean(requestId);
+  const authSubtitle = loginApproved
+    ? "You can return to Meteria402."
+    : isLogin
+    ? "Use your wallet"
+    : "Review and sign this payment authorization.";
   const canSign = Boolean(authRequest && ownerAddress && ownerAllowed && !busy && !result);
 
+  function returnToRequester() {
+    if (authRequest?.return_origin) {
+      window.location.assign(authRequest.return_origin);
+    }
+  }
+
   return (
-    <main>
-      <header>
-        <h1>meter402 Autopay</h1>
-        <p>{requestId
-          ? "Review and sign an autopay authorization with your owner wallet."
-          : "Approve scoped x402 autopay requests with your owner wallet."}</p>
+    <main className={authPage ? "auth-page" : ""}>
+      <header className={authPage ? "auth-topbar" : ""}>
+        <h1>{loginApproved ? "Login Approved" : isLogin ? "Confirm Login" : "Confirm Payment"}</h1>
+        <p>{authPage ? authSubtitle : "Approve scoped x402 payment requests with your owner wallet."}</p>
       </header>
 
       <div className="content">
-        {!requestId && (
+        {loginApproved ? (
+          <section className="success-panel">
+            <div className="success-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M7 12.5l3.2 3.2L17.5 8" />
+              </svg>
+            </div>
+            <p>You can return to Meteria402.</p>
+            <div className="detail-list success-list">
+              <div className="detail-row">
+                <span className="detail-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24">
+                    <circle cx="12" cy="8" r="3.5" />
+                    <path d="M5.5 19a6.5 6.5 0 0 1 13 0" />
+                  </svg>
+                </span>
+                <span className="detail-label">Wallet</span>
+                <strong>{ownerAddress ? shortAddress(ownerAddress) : "Connected"}</strong>
+                {ownerAddress && (
+                  <button className="detail-copy" type="button" aria-label="Copy wallet address" onClick={() => navigator.clipboard?.writeText(ownerAddress)}>
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <rect x="9" y="9" width="10" height="10" rx="2" />
+                      <path d="M5 15V7a2 2 0 0 1 2-2h8" />
+                    </svg>
+                  </button>
+                )}
+              </div>
+              <div className="detail-row">
+                <span className="detail-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="9" />
+                    <path d="M3 12h18M12 3c2.5 2.7 3.8 5.7 3.8 9s-1.3 6.3-3.8 9M12 3c-2.5 2.7-3.8 5.7-3.8 9s1.3 6.3 3.8 9" />
+                  </svg>
+                </span>
+                <span className="detail-label">Network</span>
+                <strong>{networkLabel(authRequest.network)}</strong>
+              </div>
+              <div className="detail-row">
+                <span className="detail-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="9" />
+                    <path d="M12 7v5l3 2" />
+                  </svg>
+                </span>
+                <span className="detail-label">Timestamp</span>
+                <strong>{formatTimestamp(approvedAt)}</strong>
+              </div>
+            </div>
+          </section>
+        ) : !requestId && (
           <section className="empty">
-            <h2>Autopay Authorization</h2>
-            <p>Use this page to approve scoped x402 autopay requests with your owner wallet. Start from a payment requester QR code or authorization link.</p>
+            <h2>Payment Authorization</h2>
+            <p>Use this page to approve scoped x402 payment requests with your owner wallet. Start from a payment QR code or authorization link.</p>
           </section>
         )}
 
-        {policy && (
+        {!loginApproved && policy && (
           <section>
             <h2>Request</h2>
             <dl>
@@ -167,7 +230,71 @@ function App() {
           </section>
         )}
 
-        {authRequest && (
+        {!loginApproved && authRequest && !policy && (
+          <section className={isLogin ? "confirm-card login-confirm-panel" : "confirm-card"}>
+            <div className="app-identity">
+              <span className="app-mark">M</span>
+              <div>
+                <h2>Meteria402</h2>
+                <p>{isLogin ? "Wallet login request" : "Authorization request"}</p>
+              </div>
+            </div>
+            {isLogin ? (
+              <>
+                <div className="detail-list">
+                  <div className="detail-row">
+                    <span className="detail-icon" aria-hidden="true">
+                      <svg viewBox="0 0 24 24">
+                        <circle cx="12" cy="8" r="3.5" />
+                        <path d="M5.5 19a6.5 6.5 0 0 1 13 0" />
+                      </svg>
+                    </span>
+                    <span className="detail-label">Wallet</span>
+                    <strong>{ownerAddress ? shortAddress(ownerAddress) : "Not connected"}</strong>
+                    {ownerAddress && (
+                      <button className="detail-copy" type="button" aria-label="Copy wallet address" onClick={() => navigator.clipboard?.writeText(ownerAddress)}>
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <rect x="9" y="9" width="10" height="10" rx="2" />
+                          <path d="M5 15V7a2 2 0 0 1 2-2h8" />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+                  <div className="detail-row">
+                    <span className="detail-icon" aria-hidden="true">
+                      <svg viewBox="0 0 24 24">
+                        <circle cx="12" cy="12" r="9" />
+                        <path d="M3 12h18M12 3c2.5 2.7 3.8 5.7 3.8 9s-1.3 6.3-3.8 9M12 3c-2.5 2.7-3.8 5.7-3.8 9s1.3 6.3 3.8 9" />
+                      </svg>
+                    </span>
+                    <span className="detail-label">Network</span>
+                    <strong>{networkLabel(authRequest.network)}</strong>
+                  </div>
+                  <div className="detail-row">
+                    <span className="detail-icon" aria-hidden="true">
+                      <svg viewBox="0 0 24 24">
+                        <circle cx="12" cy="12" r="9" />
+                        <path d="M12 7v5l3 2" />
+                      </svg>
+                    </span>
+                    <span className="detail-label">Timestamp</span>
+                    <strong>{formatTimestamp(authRequest.expires_at)}</strong>
+                  </div>
+                </div>
+                <div className="status confirm-status">{walletStatus}</div>
+                <p className="security-note">Only sign requests you trust.</p>
+              </>
+            ) : (
+              <dl>
+                <dt>Status</dt><dd>{authRequest.status}</dd>
+                <dt>Expires</dt><dd>{authRequest.expires_at}</dd>
+                <dt>Network</dt><dd>{authRequest.network || "eip155:8453"}</dd>
+              </dl>
+            )}
+          </section>
+        )}
+
+        {!loginApproved && authRequest && !isLogin && (
           <section>
             <h2>Wallet</h2>
             <dl>
@@ -178,19 +305,18 @@ function App() {
           </section>
         )}
 
-        {result && (
-          <section>
-            <h2>Result</h2>
-            <textarea readOnly value={result} />
-          </section>
-        )}
       </div>
 
-      {authRequest && (
+      {loginApproved ? (
         <div className="actions">
-          {!ownerAddress && <button disabled={busy} onClick={() => connectWallet().catch(showError)}>Connect</button>}
-          {ownerAddress && <button disabled={!canSign} onClick={() => approveAuthorization().catch(showError)}>Sign</button>}
+          <button className="secondary" onClick={() => window.close()}>Close</button>
+          <button disabled={!authRequest?.return_origin} onClick={returnToRequester}>Return</button>
+        </div>
+      ) : authRequest && (
+        <div className="actions">
           <button className="danger" disabled={busy || Boolean(result)} onClick={() => denyAuthorization().catch(showError)}>Deny</button>
+          {!ownerAddress && <button disabled={busy} onClick={() => connectWallet().catch(showError)}>Connect</button>}
+          {ownerAddress && <button disabled={!canSign} onClick={() => approveAuthorization().catch(showError)}>{isLogin ? "Sign in" : "Sign"}</button>}
         </div>
       )}
     </main>
@@ -200,8 +326,13 @@ function App() {
 async function personalSign(provider, message, address) {
   try {
     return await provider.request({ method: "personal_sign", params: [message, address] });
-  } catch {
-    return await provider.request({ method: "personal_sign", params: [address, message] });
+  } catch (error) {
+    if (isUserRejectedRequest(error)) throw error;
+    try {
+      return await provider.request({ method: "personal_sign", params: [address, message] });
+    } catch (fallbackError) {
+      throw normalizeThrownError(fallbackError);
+    }
   }
 }
 
@@ -209,10 +340,76 @@ async function fetchJson(url, init) {
   const response = await fetch(url, init);
   const json = await response.json().catch(() => null);
   if (!response.ok) {
-    const message = json?.error?.message || `Request failed with HTTP ${response.status}.`;
+    const message = readableErrorMessage(json?.error) || `Request failed with HTTP ${response.status}.`;
     throw new Error(message);
   }
   return json;
+}
+
+function normalizeThrownError(error) {
+  if (error instanceof Error) return error;
+  return new Error(readableErrorMessage(error));
+}
+
+function readableErrorMessage(error) {
+  if (!error) return "Request failed.";
+  if (typeof error === "string") return error;
+  if (error instanceof Error) return error.message || "Request failed.";
+  if (typeof error === "object") {
+    const value = error;
+    const nestedMessage = readableString(value.message)
+      || readableString(value.shortMessage)
+      || readableString(value.reason)
+      || readableString(value.details)
+      || readableString(value.error?.message)
+      || readableString(value.data?.message);
+    if (nestedMessage) return nestedMessage;
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return "Request failed.";
+    }
+  }
+  return String(error);
+}
+
+function readableString(value) {
+  return typeof value === "string" && value.trim() ? value : "";
+}
+
+function isUserRejectedRequest(error) {
+  if (!error || typeof error !== "object") return false;
+  const code = error.code ?? error.error?.code ?? error.data?.code;
+  if (code === 4001 || code === "4001" || code === "ACTION_REJECTED") return true;
+  const message = readableErrorMessage(error).toLowerCase();
+  return message.includes("user rejected")
+    || message.includes("user denied")
+    || message.includes("rejected by user")
+    || message.includes("request rejected")
+    || message.includes("cancelled")
+    || message.includes("canceled");
+}
+
+function shortAddress(value) {
+  if (!value || value.length < 12) return value || "";
+  return `${value.slice(0, 5)}...${value.slice(-4)}`;
+}
+
+function networkLabel(value) {
+  if (!value || value === "eip155:8453") return "Base";
+  return value;
+}
+
+function formatTimestamp(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value || "";
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
 }
 
 createRoot(document.getElementById("root")).render(<App />);
