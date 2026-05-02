@@ -670,7 +670,7 @@ async function personalSign(provider, message, address) {
 }
 
 async function fetchJson(url, init) {
-  const response = await fetch(url, init);
+  const response = await fetch(url, { ...init, credentials: "include" });
   const json = await response.json().catch(() => null);
   if (!response.ok) {
     const message = readableErrorMessage(json?.error) || `Request failed with HTTP ${response.status}.`;

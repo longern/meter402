@@ -1179,6 +1179,24 @@ function clearSessionCookie(): string {
 }
 
 async function createSession(env: Env, owner: string): Promise<string> {
+  // Ensure table exists (migration may not have been applied remotely)
+  try {
+    await env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS autopay_sessions (
+        id TEXT PRIMARY KEY,
+        owner TEXT NOT NULL,
+        token TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        revoked_at TEXT
+      )
+    `).run();
+    await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_autopay_sessions_token ON autopay_sessions(token)`).run();
+    await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_autopay_sessions_owner ON autopay_sessions(owner)`).run();
+  } catch {
+    // Ignore errors — table likely already exists
+  }
+
   const id = crypto.randomUUID();
   const token = randomToken(48);
   const now = new Date().toISOString();
@@ -1219,6 +1237,7 @@ async function handleAuthChallenge(request: Request, _env: Env): Promise<Respons
     statement: LOGIN_STATEMENT,
     issuedAt,
     expirationTime,
+    version: "1",
   }).prepareMessage();
 
   return jsonResponse({
