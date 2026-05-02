@@ -780,3 +780,145 @@ dd {
   flex: 1;
   text-align: left;
 }
+
+/* Login center layout */
+.login-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 24px 0 16px;
+}
+
+.login-icon {
+  width: 64px;
+  height: 64px;
+  background: #eff6ff;
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 20px;
+}
+
+.login-icon svg {
+  width: 32px;
+  height: 32px;
+  color: #2563eb;
+}
+
+.login-center h2 {
+  font-size: 20px;
+  font-weight: 700;
+  margin: 0 0 8px;
+}
+
+.login-subtitle {
+  color: #6b7280;
+  font-size: 14px;
+  margin: 0 0 24px;
+  line-height: 1.5;
+}
+
+/* Divider with text */
+.divider {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  max-width: 360px;
+  margin: 0 auto 16px;
+  gap: 12px;
+}
+
+.divider::before,
+.divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: #e5e7eb;
+}
+
+.divider span {
+  color: #6b7280;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* Wallet list */
+.wallet-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  max-width: 360px;
+  margin: 0 auto;
+}
+
+.wallet-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  text-decoration: none;
+  color: #111827;
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.wallet-card:hover {
+  background: #f9fafb;
+  border-color: #d1d5db;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+}
+
+.wallet-card img {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+.wallet-name {
+  flex: 1;
+  text-align: left;
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.wallet-arrow {
+  width: 20px;
+  height: 20px;
+  color: #9ca3af;
+  flex-shrink: 0;
+}
+
+/* Security footer */
+.security-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 24px;
+  padding: 12px 16px;
+}
+
+.security-footer svg {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.security-title {
+  color: #111827;
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0 0 2px;
+}
+
+.security-desc {
+  color: #6b7280;
+  font-size: 12px;
+  margin: 0;
+}

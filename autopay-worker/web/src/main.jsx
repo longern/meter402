@@ -275,45 +275,75 @@ function App() {
             <p>Sign in to view your authorizations and payments.</p>
           </header>
           <div className="content">
-            <section className="login-prompt">
-              <h2>Sign In Required</h2>
-              {!hasWallet ? (
+            <div className="login-center">
+              {!hasWallet && (
                 <>
-                  <p>No wallet detected.</p>
-                  <div className="wallet-guide">
-                    {isMobile ? (
-                      <>
-                        <p className="guide-title">Open in a wallet browser</p>
-                        <p className="guide-text">
-                          Please open this page in a wallet app to connect your wallet and sign in.
-                        </p>
-                        <div className="wallet-icon-buttons">
-                          <a className="wallet-icon-btn" href={`https://go.cb-w.com/dapp?cb_url=${encodeURIComponent(window.location.href)}`}>
-                            <img src="/wallet-icons/coinbase-wallet.svg" alt="Coinbase Wallet" />
-                            <span>Coinbase Wallet</span>
-                          </a>
-                          <a className="wallet-icon-btn" href={`https://www.okx.com/download?deeplink=okx%3A%2F%2Fwallet%2Fdapp%2Furl%3FdappUrl%3D${encodeURIComponent(window.location.href)}`}>
-                            <img src="/wallet-icons/okx-wallet.svg" alt="OKX Wallet" />
-                            <span>OKX Wallet</span>
-                          </a>
-                        </div>
-                      </>
-                    ) : (
-                      <>
-                        <p className="guide-title">Install a wallet extension</p>
-                        <p className="guide-text">
-                          Please install a wallet browser extension such as{" "}
-                          <a href="https://metamask.io" target="_blank" rel="noopener noreferrer">MetaMask</a>
-                          {" "}and refresh this page.
-                        </p>
-                      </>
-                    )}
+                  <div className="login-icon">
+                    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <rect x="2" y="5" width="20" height="14" rx="2" stroke="currentColor" strokeWidth="1.5"/>
+                      <path d="M2 10h20" stroke="currentColor" strokeWidth="1.5"/>
+                      <circle cx="7" cy="12" r="1" fill="currentColor"/>
+                    </svg>
                   </div>
+                  <h2>Sign in to continue</h2>
+                  <p className="login-subtitle">Connect your wallet to access your dashboard.</p>
+
+                  {isMobile && (
+                    <>
+                      <div className="divider">
+                        <span>Choose a wallet</span>
+                      </div>
+                      <div className="wallet-list">
+                        <a className="wallet-card" href={`https://go.cb-w.com/dapp?cb_url=${encodeURIComponent(window.location.href)}`}>
+                          <img src="/wallet-icons/coinbase-wallet.svg" alt="Coinbase Wallet" />
+                          <span className="wallet-name">Coinbase Wallet</span>
+                          <svg className="wallet-arrow" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                        </a>
+                        <a className="wallet-card" href={`https://www.okx.com/download?deeplink=okx%3A%2F%2Fwallet%2Fdapp%2Furl%3FdappUrl%3D${encodeURIComponent(window.location.href)}`}>
+                          <img src="/wallet-icons/okx-wallet.svg" alt="OKX Wallet" />
+                          <span className="wallet-name">OKX Wallet</span>
+                          <svg className="wallet-arrow" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                        </a>
+                      </div>
+                      <div className="security-footer">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" stroke="#22c55e" strokeWidth="1.5" fill="#f0fdf4"/>
+                          <path d="M9 12l2 2 4-4" stroke="#22c55e" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                        <div>
+                          <p className="security-title">Your wallet connection is secure</p>
+                          <p className="security-desc">We never store your private keys.</p>
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {!isMobile && (
+                    <p className="guide-text" style={{ marginTop: "12px" }}>
+                      Please install a wallet browser extension such as{" "}
+                      <a href="https://metamask.io" target="_blank" rel="noopener noreferrer">MetaMask</a>
+                      {" "}and refresh this page.
+                    </p>
+                  )}
                 </>
-              ) : (
+              )}
+
+              {hasWallet && (
                 <>
-                  <p>Connect your wallet and sign in to access your autopay records.</p>
-                  <div className="wallet-row" style={{ marginTop: "14px" }}>
+                  <div className="login-icon">
+                    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <rect x="2" y="5" width="20" height="14" rx="2" stroke="currentColor" strokeWidth="1.5"/>
+                      <path d="M2 10h20" stroke="currentColor" strokeWidth="1.5"/>
+                      <circle cx="7" cy="12" r="1" fill="currentColor"/>
+                    </svg>
+                  </div>
+                  <h2>Sign in to continue</h2>
+                  <p className="login-subtitle">Connect your wallet to access your dashboard.</p>
+                  <div className="wallet-row" style={{ marginTop: "20px" }}>
                     {ownerAddress ? (
                       <>
                         <strong>{shortAddress(ownerAddress)}</strong>
@@ -323,7 +353,7 @@ function App() {
                       <span style={{ color: "#6b7280" }}>Wallet connected, requesting accounts...</span>
                     )}
                   </div>
-                  <div style={{ marginTop: "14px", display: "flex", gap: "10px" }}>
+                  <div style={{ marginTop: "16px" }}>
                     {ownerAddress && (
                       <button disabled={busy} onClick={() => handleLogin()}>
                         Sign In
@@ -332,7 +362,7 @@ function App() {
                   </div>
                 </>
               )}
-            </section>
+            </div>
           </div>
         </>
       );

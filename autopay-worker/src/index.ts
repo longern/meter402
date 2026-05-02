@@ -1206,7 +1206,7 @@ const LOGIN_TTL_SECONDS = 300;
 
 async function handleAuthChallenge(request: Request, _env: Env): Promise<Response> {
   const url = new URL(request.url);
-  const nonce = randomToken(16);
+  const nonce = randomSiweNonce();
   const issuedAt = new Date().toISOString();
   const expirationTime = new Date(Date.now() + LOGIN_TTL_SECONDS * 1000).toISOString();
 
