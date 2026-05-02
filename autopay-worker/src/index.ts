@@ -6,6 +6,7 @@ import { getAddress, verifyMessage, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
 type Env = {
+  DB: D1Database;
   AUTOPAY_PRIVATE_KEY?: string;
   AUTOPAY_WALLETS?: string;
   AUTOPAY_ALLOWED_OWNERS?: string;
@@ -291,6 +292,30 @@ export default {
 
       if (request.method === "POST" && url.pathname === "/api/pay") {
         return await handlePay(request, env);
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/auth/challenge") {
+        return await handleAuthChallenge(request, env);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/auth/login") {
+        return await handleAuthLogin(request, env);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/auth/logout") {
+        return await handleAuthLogout(request, env);
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/auth/me") {
+        return await handleAuthMe(request, env);
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/audit/authorizations") {
+        return await handleAuditAuthorizations(request, env);
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/audit/payments") {
+        return await handleAuditPayments(request, env);
       }
 
       if (request.method === "POST" && url.pathname === "/api/proxy") {
@@ -1090,4 +1115,287 @@ class HttpError extends Error {
   ) {
     super(message);
   }
+}
+
+/* ─── Session helpers ─── */
+
+const SESSION_COOKIE_NAME = "autopay_session";
+const SESSION_TTL_DAYS = 7;
+
+function parseCookieHeader(request: Request): Record<string, string> {
+  const cookie = request.headers.get("cookie");
+  if (!cookie) return {};
+  const entries: Record<string, string> = {};
+  for (const part of cookie.split(";")) {
+    const [name, ...rest] = part.trim().split("=");
+    if (name && rest.length > 0) {
+      entries[decodeURIComponent(name.trim())] = decodeURIComponent(rest.join("=").trim());
+    }
+  }
+  return entries;
+}
+
+async function getSessionOwner(request: Request, env: Env): Promise<string | null> {
+  const cookies = parseCookieHeader(request);
+  const token = cookies[SESSION_COOKIE_NAME];
+  if (!token) return null;
+  const row = await env.DB.prepare(
+    `SELECT owner FROM autopay_sessions
+     WHERE token = ? AND revoked_at IS NULL AND expires_at > ?`
+  ).bind(token, new Date().toISOString()).first<{ owner: string }>();
+  return row?.owner ?? null;
+}
+
+async function requireSession(request: Request, env: Env): Promise<string> {
+  const owner = await getSessionOwner(request, env);
+  if (!owner) {
+    throw new HttpError(401, "session_required", "Sign in to access this resource.");
+  }
+  return owner;
+}
+
+function setSessionCookie(token: string, maxAgeSeconds = SESSION_TTL_DAYS * 86400): string {
+  const parts = [
+    `${encodeURIComponent(SESSION_COOKIE_NAME)}=${encodeURIComponent(token)}`,
+    "Path=/",
+    `Max-Age=${maxAgeSeconds}`,
+    "HttpOnly",
+    "Secure",
+    "SameSite=Lax",
+  ];
+  return parts.join("; ");
+}
+
+function clearSessionCookie(): string {
+  const parts = [
+    `${encodeURIComponent(SESSION_COOKIE_NAME)}=`,
+    "Path=/",
+    "Max-Age=0",
+    "HttpOnly",
+    "Secure",
+    "SameSite=Lax",
+  ];
+  return parts.join("; ");
+}
+
+async function createSession(env: Env, owner: string): Promise<string> {
+  const id = crypto.randomUUID();
+  const token = randomToken(48);
+  const now = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + SESSION_TTL_DAYS * 86400_000).toISOString();
+  await env.DB.prepare(
+    `INSERT INTO autopay_sessions (id, owner, token, created_at, expires_at)
+     VALUES (?, ?, ?, ?, ?)`
+  ).bind(id, getAddress(owner), token, now, expiresAt).run();
+  return token;
+}
+
+async function revokeSession(request: Request, env: Env): Promise<void> {
+  const cookies = parseCookieHeader(request);
+  const token = cookies[SESSION_COOKIE_NAME];
+  if (!token) return;
+  await env.DB.prepare(
+    `UPDATE autopay_sessions SET revoked_at = ? WHERE token = ?`
+  ).bind(new Date().toISOString(), token).run();
+}
+
+/* ─── Auth endpoints ─── */
+
+const LOGIN_STATEMENT = "Sign in to Meteria402 Autopay Dashboard";
+const LOGIN_TTL_SECONDS = 300;
+
+async function handleAuthChallenge(request: Request, _env: Env): Promise<Response> {
+  const url = new URL(request.url);
+  const nonce = randomToken(16);
+  const issuedAt = new Date().toISOString();
+  const expirationTime = new Date(Date.now() + LOGIN_TTL_SECONDS * 1000).toISOString();
+
+  const siweMessage = new SiweMessage({
+    domain: url.host,
+    uri: url.origin,
+    address: "0x0000000000000000000000000000000000000000",
+    chainId: 8453,
+    nonce,
+    statement: LOGIN_STATEMENT,
+    issuedAt,
+    expirationTime,
+  }).prepareMessage();
+
+  return jsonResponse({
+    nonce,
+    message: siweMessage,
+    issued_at: issuedAt,
+    expiration_time: expirationTime,
+  });
+}
+
+async function handleAuthLogin(request: Request, env: Env): Promise<Response> {
+  const body = await readJsonObject(request);
+  const messageRaw = requireString(body.message ?? body.siwe_message, "message");
+  const signatureRaw = requireString(body.signature ?? body.siwe_signature, "signature");
+
+  let siwe: SiweMessage;
+  try {
+    siwe = new SiweMessage(messageRaw);
+  } catch {
+    throw new HttpError(400, "invalid_siwe", "Could not parse SIWE message.");
+  }
+
+  const url = new URL(request.url);
+  if (siwe.domain !== url.host) {
+    throw new HttpError(403, "domain_mismatch", "SIWE domain does not match this worker.");
+  }
+  if (siwe.uri !== url.origin) {
+    throw new HttpError(403, "uri_mismatch", "SIWE URI does not match this worker.");
+  }
+  if (siwe.statement !== LOGIN_STATEMENT) {
+    throw new HttpError(403, "statement_mismatch", "SIWE statement does not match expected login statement.");
+  }
+  if (siwe.expirationTime && new Date(siwe.expirationTime) < new Date()) {
+    throw new HttpError(403, "challenge_expired", "Login challenge has expired. Please request a new one.");
+  }
+
+  const valid = await verifyMessage({
+    address: getAddress(siwe.address),
+    message: messageRaw,
+    signature: signatureRaw as Hex,
+  });
+  if (!valid) {
+    throw new HttpError(403, "invalid_signature", "SIWE signature is invalid.");
+  }
+
+  const owner = getAddress(siwe.address);
+  const allowedOwners = getAllowedOwners(env);
+  if (allowedOwners.length > 0 && !allowedOwners.includes(owner)) {
+    throw new HttpError(403, "owner_not_allowed", "This wallet address is not in the allowlist.");
+  }
+
+  const token = await createSession(env, owner);
+  const headers = new Headers(JSON_HEADERS);
+  for (const [key, value] of Object.entries(CORS_HEADERS)) {
+    headers.set(key, value);
+  }
+  headers.set("Set-Cookie", setSessionCookie(token));
+
+  return new Response(JSON.stringify({
+    ok: true,
+    owner,
+  }), { status: 200, headers });
+}
+
+async function handleAuthLogout(request: Request, env: Env): Promise<Response> {
+  await revokeSession(request, env);
+  const headers = new Headers(JSON_HEADERS);
+  for (const [key, value] of Object.entries(CORS_HEADERS)) {
+    headers.set(key, value);
+  }
+  headers.set("Set-Cookie", clearSessionCookie());
+  return new Response(JSON.stringify({ ok: true }), { status: 200, headers });
+}
+
+async function handleAuthMe(request: Request, env: Env): Promise<Response> {
+  const owner = await getSessionOwner(request, env);
+  return jsonResponse({
+    authenticated: Boolean(owner),
+    owner: owner ?? null,
+  });
+}
+
+/* ─── Audit endpoints (protected) ─── */
+
+async function handleAuditAuthorizations(request: Request, env: Env): Promise<Response> {
+  const sessionOwner = await requireSession(request, env);
+  const url = new URL(request.url);
+  const ownerParam = url.searchParams.get("owner");
+  const statusParam = url.searchParams.get("status");
+  const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "50", 10), 200);
+  const offset = parseInt(url.searchParams.get("offset") ?? "0", 10);
+
+  const owner = ownerParam ?? sessionOwner;
+  if (owner.toLowerCase() !== sessionOwner.toLowerCase()) {
+    throw new HttpError(403, "access_denied", "You can only view your own authorization records.");
+  }
+
+  let sql = `SELECT * FROM autopay_authorizations WHERE owner = ?`;
+  const params: (string | number)[] = [owner];
+  if (statusParam) {
+    sql += ` AND status = ?`;
+    params.push(statusParam);
+  }
+  sql += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+  params.push(limit, offset);
+
+  const { results } = await env.DB.prepare(sql).bind(...params).all<{
+    id: string;
+    request_id: string;
+    kind: string;
+    owner: string | null;
+    worker_origin: string;
+    policy_network: string | null;
+    policy_asset: string | null;
+    policy_max_single_amount: string | null;
+    policy_valid_before: string | null;
+    status: string;
+    created_at: string;
+    approved_at: string | null;
+    expires_at: string;
+  }>();
+
+  return jsonResponse({
+    authorizations: results ?? [],
+    limit,
+    offset,
+  });
+}
+
+async function handleAuditPayments(request: Request, env: Env): Promise<Response> {
+  const sessionOwner = await requireSession(request, env);
+  const url = new URL(request.url);
+  const ownerParam = url.searchParams.get("owner");
+  const statusParam = url.searchParams.get("status");
+  const authorizationId = url.searchParams.get("authorization_id") ?? undefined;
+  const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "50", 10), 200);
+  const offset = parseInt(url.searchParams.get("offset") ?? "0", 10);
+
+  const owner = ownerParam ?? sessionOwner;
+  if (owner.toLowerCase() !== sessionOwner.toLowerCase()) {
+    throw new HttpError(403, "access_denied", "You can only view your own payment records.");
+  }
+
+  let sql = `SELECT * FROM autopay_payments WHERE owner = ?`;
+  const params: (string | number)[] = [owner];
+  if (statusParam) {
+    sql += ` AND status = ?`;
+    params.push(statusParam);
+  }
+  if (authorizationId) {
+    sql += ` AND authorization_id = ?`;
+    params.push(authorizationId);
+  }
+  sql += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+  params.push(limit, offset);
+
+  const { results } = await env.DB.prepare(sql).bind(...params).all<{
+    id: string;
+    authorization_id: string | null;
+    owner: string;
+    network: string | null;
+    asset: string | null;
+    pay_to: string | null;
+    amount: string | null;
+    amount_decimal: string | null;
+    currency: string;
+    resource_url: string | null;
+    tx_hash: string | null;
+    status: string;
+    error_message: string | null;
+    created_at: string;
+    settled_at: string | null;
+  }>();
+
+  return jsonResponse({
+    payments: results ?? [],
+    limit,
+    offset,
+  });
 }
