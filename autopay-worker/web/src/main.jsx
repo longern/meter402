@@ -24,6 +24,9 @@ function App() {
 
   const [hasWallet, setHasWallet] = useState(false);
 
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState(false);
+
   const ownerAllowed = useMemo(() => {
     if (!ownerAddress || allowedOwners.length === 0) return true;
     const owner = ownerAddress.toLowerCase();
@@ -285,6 +288,14 @@ function App() {
                           Please open this page inside a wallet app’s built-in browser
                           (e.g. MetaMask, Coinbase Wallet, Rainbow) to connect your wallet.
                         </p>
+                        <div className="wallet-deep-links" style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "12px" }}>
+                          <a className="button-link" href={`https://metamask.app.link/dapp/${window.location.host}${window.location.pathname}${window.location.search}`}>
+                            Open in MetaMask
+                          </a>
+                          <a className="button-link secondary" href={`https://rnbwapp.com/${window.location.host}${window.location.pathname}${window.location.search}`}>
+                            Open in Rainbow
+                          </a>
+                        </div>
                       </>
                     ) : (
                       <>

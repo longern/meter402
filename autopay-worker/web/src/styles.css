@@ -707,3 +707,37 @@ dd {
 .auth-error .actions button:last-child:hover {
   background: #374151;
 }
+
+.wallet-deep-links {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.button-link {
+  display: inline-block;
+  text-align: center;
+  text-decoration: none;
+  border-radius: 6px;
+  padding: 10px 14px;
+  background: #111827;
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.button-link:hover {
+  background: #374151;
+}
+
+.button-link.secondary {
+  background: #fff;
+  color: #111827;
+  border: 1px solid #d1d5db;
+}
+
+.button-link.secondary:hover {
+  background: #f3f4f6;
+}
