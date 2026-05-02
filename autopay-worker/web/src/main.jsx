@@ -285,15 +285,16 @@ function App() {
                       <>
                         <p className="guide-title">Open in a wallet browser</p>
                         <p className="guide-text">
-                          Please open this page inside a wallet app’s built-in browser
-                          (e.g. MetaMask, Coinbase Wallet, Rainbow) to connect your wallet.
+                          Please open this page in a wallet app to connect your wallet and sign in.
                         </p>
-                        <div className="wallet-deep-links" style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "12px" }}>
-                          <a className="button-link" href={`https://metamask.app.link/dapp/${window.location.host}${window.location.pathname}${window.location.search}`}>
-                            Open in MetaMask
+                        <div className="wallet-icon-buttons">
+                          <a className="wallet-icon-btn" href={`https://go.cb-w.com/dapp?cb_url=${encodeURIComponent(window.location.href)}`}>
+                            <img src="/wallet-icons/coinbase-wallet.svg" alt="Coinbase Wallet" />
+                            <span>Coinbase Wallet</span>
                           </a>
-                          <a className="button-link secondary" href={`https://rnbwapp.com/${window.location.host}${window.location.pathname}${window.location.search}`}>
-                            Open in Rainbow
+                          <a className="wallet-icon-btn" href={`https://www.okx.com/download?deeplink=okx%3A%2F%2Fwallet%2Fdapp%2Furl%3FdappUrl%3D${encodeURIComponent(window.location.href)}`}>
+                            <img src="/wallet-icons/okx-wallet.svg" alt="OKX Wallet" />
+                            <span>OKX Wallet</span>
                           </a>
                         </div>
                       </>
