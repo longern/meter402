@@ -519,6 +519,13 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
   const [lastDepositQuoteToken, setLastDepositQuoteToken] = useState("");
   const [autopayWalletBalance, setAutopayWalletBalance] = useState(null);
   const [autopayWalletBalanceError, setAutopayWalletBalanceError] = useState("");
+  const [capabilities, setCapabilities] = useState([]);
+  const [capabilitiesLoading, setCapabilitiesLoading] = useState(false);
+  const [capCreateOpen, setCapCreateOpen] = useState(false);
+  const [capTotalBudget, setCapTotalBudget] = useState("5.00");
+  const [capMaxSingleAmount, setCapMaxSingleAmount] = useState("5.00");
+  const [capTtlDays, setCapTtlDays] = useState(7);
+  const [capDialog, setCapDialog] = useState(null);
   const [account, setAccount] = useState(null);
   const [apiKeys, setApiKeys] = useState([]);
   const [lastInvoices, setLastInvoices] = useState([]);
@@ -551,6 +558,12 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
     }
   }, [activeView, identity?.owner]);
 
+  useEffect(() => {
+    if (activeView === "autopay" && identity?.owner) {
+      loadCapabilities();
+    }
+  }, [activeView, identity?.owner]);
+
   function show(value) {
     setOutput(typeof value === "string" ? value : JSON.stringify(value, null, 2));
   }
@@ -572,6 +585,9 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
       show(readableError(error));
       if (label === "walletPayment") {
         setPaymentDialog((current) => current ? { ...current, status: "failed", error: readableError(error) } : current);
+      }
+      if (label === "createCapability") {
+        setCapDialog((current) => current ? { ...current, status: "failed", error: readableError(error) } : current);
       }
     } finally {
       setBusy("");
@@ -759,6 +775,95 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
     }
   }
 
+  async function loadCapabilities() {
+    setCapabilitiesLoading(true);
+    try {
+      const json = await request("/api/autopay/capabilities");
+      setCapabilities(json.capabilities || []);
+    } catch (error) {
+      show(readableError(error));
+    } finally {
+      setCapabilitiesLoading(false);
+    }
+  }
+
+  async function createCapability(event) {
+    event.preventDefault();
+    setCapCreateOpen(false);
+    await withBusy("createCapability", async () => {
+      const json = await request("/api/autopay/capabilities", {
+        method: "POST",
+        body: JSON.stringify({
+          total_budget: capTotalBudget.trim(),
+          max_single_amount: capMaxSingleAmount.trim(),
+          ttl_days: capTtlDays,
+          autopay_url: autopayUrl.trim() || undefined,
+        }),
+      });
+
+      const qr = json.verification_uri_complete
+        ? await QRCode.toDataURL(json.verification_uri_complete, {
+            margin: 1,
+            scale: 8,
+            color: { dark: "#111827", light: "#ffffff" },
+          })
+        : "";
+
+      setCapDialog({
+        status: "waiting",
+        qr,
+        url: json.verification_uri_complete,
+        error: "",
+        capId: json.capability_id,
+      });
+
+      const result = await waitForAutopayAuthorization(
+        `/api/autopay/capabilities/${encodeURIComponent(json.capability_id)}/complete`,
+        {
+          poll_token: json.poll_token,
+          autopay_url: json.autopay_url,
+          total_budget: capTotalBudget.trim(),
+          max_single_amount: capMaxSingleAmount.trim(),
+        },
+        "",
+      );
+
+      if (result.status === "active" || result.status === "settled") {
+        setCapDialog((current) => (current ? { ...current, status: "done" } : current));
+      } else {
+        const errorText = typeof result.message === "string" ? result.message : `Authorization ${result.status || "failed"}.`;
+        setCapDialog((current) => (current ? { ...current, status: "failed", error: errorText } : current));
+      }
+      show(result);
+      await loadCapabilities();
+    });
+  }
+
+  async function revokeCapability(capId) {
+    if (!window.confirm("Revoke this autopay authorization? Future autopay requests will require fresh approval.")) return;
+    await withBusy("revokeCapability", async () => {
+      const json = await request(`/api/autopay/capabilities/${encodeURIComponent(capId)}`, { method: "DELETE" });
+      show(json);
+      await loadCapabilities();
+    });
+  }
+
+  function openCapCreate() {
+    setCapTotalBudget("5.00");
+    setCapMaxSingleAmount("5.00");
+    setCapTtlDays(7);
+    setCapCreateOpen(true);
+  }
+
+  function closeCapCreate() {
+    setCapCreateOpen(false);
+  }
+
+  function closeCapDialog() {
+    if (busy === "createCapability" && capDialog?.status === "waiting") return;
+    setCapDialog(null);
+  }
+
   async function loadAccount() {
     await withBusy("loadAccount", async () => {
       const json = await request("/api/account");
@@ -920,14 +1025,25 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
   }
 
   async function pollAutopay(path, body) {
+    let lastError = "";
     for (;;) {
       await new Promise((resolve) => setTimeout(resolve, 2000));
-      const json = await request(path, {
-        method: "POST",
-        body: JSON.stringify(body),
-      });
-      show(json);
-      if (json.status === "settled" || json.status === "settle_failed" || json.status === "denied") return json;
+      try {
+        const json = await request(path, {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+        show(json);
+        if (json.status === "settled" || json.status === "settle_failed" || json.status === "denied" || json.status === "active") {
+          return json;
+        }
+      } catch (error) {
+        lastError = readableError(error);
+        show({ message: "Polling error: " + lastError });
+        if (capDialog) {
+          setCapDialog((current) => current ? { ...current, error: lastError } : current);
+        }
+      }
     }
   }
 
@@ -950,6 +1066,7 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
 
   const navItems = [
     { href: "/console/recharge", view: "recharge", label: "Recharge" },
+    { href: "/console/autopay", view: "autopay", label: "Autopay Limits" },
     { href: "/console/keys", view: "keys", label: "API Keys" },
     { href: "/console/usage", view: "usage", label: "Usage" },
   ];
@@ -1216,6 +1333,108 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
           </div>
         )}
 
+        {capCreateOpen && (
+          <div className="modal-layer" role="presentation">
+            <button className="modal-scrim" type="button" aria-label="Close create limit dialog" onClick={closeCapCreate} />
+            <section className="modal-panel" role="dialog" aria-modal="true" aria-labelledby="create-cap-title">
+              <div className="modal-header">
+                <div>
+                  <h2 id="create-cap-title">Create Autopay Limit</h2>
+                  <p className="muted">A pre-approval lets the worker pay invoices on your behalf within the set limit.</p>
+                </div>
+                <button className="icon-button modal-close" type="button" aria-label="Close" onClick={closeCapCreate}>
+                  <svg className="close-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M7 7l10 10M17 7L7 17" />
+                  </svg>
+                </button>
+              </div>
+              <form onSubmit={createCapability}>
+                <div className="grid single">
+                  <label>
+                    <span>Total budget (USDC)</span>
+                    <input value={capTotalBudget} inputMode="decimal" onChange={(e) => setCapTotalBudget(e.target.value)} />
+                  </label>
+                  <label>
+                    <span>Max per transaction (USDC)</span>
+                    <input value={capMaxSingleAmount} inputMode="decimal" onChange={(e) => setCapMaxSingleAmount(e.target.value)} />
+                  </label>
+                  <label>
+                    <span>Valid for (days)</span>
+                    <input type="number" min={1} max={30} value={capTtlDays} onChange={(e) => setCapTtlDays(parseInt(e.target.value, 10) || 7)} />
+                  </label>
+                </div>
+                <div className="modal-actions">
+                  <button type="button" className="secondary" onClick={closeCapCreate}>Cancel</button>
+                  <button type="submit" disabled={isBusy}>
+                    {busy === "createCapability" ? "Creating..." : "Create limit"}
+                  </button>
+                </div>
+              </form>
+            </section>
+          </div>
+        )}
+
+        {capDialog && (
+          <div className="modal-layer" role="presentation">
+            <button className="modal-scrim" type="button" aria-label="Close limit dialog" onClick={closeCapDialog} />
+            <section className="modal-panel payment-modal" role="dialog" aria-modal="true" aria-labelledby="cap-title">
+              <div className="modal-header">
+                <div>
+                  <h2 id="cap-title">
+                    {capDialog.status === "done" ? "Limit created" : "Approve limit"}
+                  </h2>
+                  <p className="muted">
+                    {capDialog.status === "done"
+                      ? "Your autopay limit has been saved and is now active."
+                      : "Scan the QR or open the link in your wallet, then this page will finalize the limit."}
+                  </p>
+                </div>
+                <button className="icon-button modal-close" type="button" aria-label="Close" onClick={closeCapDialog}>
+                  <svg className="close-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M7 7l10 10M17 7L7 17" />
+                  </svg>
+                </button>
+              </div>
+              <div className="payment-qr-panel">
+                {capDialog.qr ? (
+                  <img src={capDialog.qr} alt="Wallet approval QR code" />
+                ) : (
+                  <div className="payment-qr-placeholder">Preparing QR</div>
+                )}
+                <div>
+                  <strong>
+                    {capDialog.status === "done"
+                      ? "Done"
+                      : capDialog.status === "failed"
+                      ? "Failed"
+                      : "Waiting for wallet signature"}
+                  </strong>
+                  <p className="muted">
+                    {capDialog.status === "done"
+                      ? "The pre-approval is now active."
+                      : capDialog.status === "failed"
+                      ? "Something went wrong. You can try creating the limit again."
+                      : "After approval, this page will complete the limit setup automatically."}
+                  </p>
+                  {capDialog.error && <p className="form-error">{capDialog.error}</p>}
+                  <div className="row">
+                    {capDialog.url && (
+                      <>
+                        <a className="button-link secondary" href={capDialog.url} target="_blank" rel="noreferrer">Open link</a>
+                        <a className="button-link secondary" href={buildCoinbaseWalletLink(capDialog.url)} target="_blank" rel="noreferrer">Coinbase</a>
+                        <a className="button-link secondary" href={buildOkxWalletLink(capDialog.url)} target="_blank" rel="noreferrer">OKX</a>
+                      </>
+                    )}
+                    {(capDialog.status === "done" || capDialog.status === "failed") && (
+                      <button type="button" onClick={closeCapDialog}>Close</button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+        )}
+
         {paymentDialog && (
           <div className="modal-layer" role="presentation">
             <button className="modal-scrim" type="button" aria-label="Close payment dialog" onClick={closePaymentDialog} />
@@ -1326,7 +1545,50 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
           </>
         )}
 
-        {activeView !== "keys" && (
+        {activeView === "autopay" && (
+          <>
+            <section>
+              <div className="console-header">
+                <div>
+                  <h2>Pre-approvals</h2>
+                  <p className="muted">Scoped autopay authorizations: amount limits, validity period, and remaining budget.</p>
+                </div>
+                <div className="row">
+                  <button disabled={isBusy || capabilitiesLoading} onClick={loadCapabilities}>Refresh</button>
+                  <button disabled={isBusy} className="secondary" onClick={openCapCreate}>Create limit</button>
+                </div>
+              </div>
+
+              {capabilities.length ? (
+                <div className="data-list">
+                  {capabilities.map((item) => (
+                    <div className={`data-row ${item.status}`} key={item.id}>
+                      <div>
+                        <strong>{item.total_budget} USDC limit</strong>
+                        <span>
+                          {item.status} · {item.remaining_budget} remaining · max {item.max_single_amount}/tx
+                          {item.valid_before ? ` · expires ${formatDateTime(item.valid_before)}` : ""}
+                        </span>
+                        <span className="mono">{shortAddress(item.owner_address)}</span>
+                      </div>
+                      <button
+                        className="secondary danger"
+                        disabled={isBusy || item.status === "revoked"}
+                        onClick={() => revokeCapability(item.id)}
+                      >
+                        Revoke
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="muted">No autopay limits. Create one to enable scoped wallet pre-approval.</p>
+              )}
+            </section>
+          </>
+        )}
+
+        {activeView !== "keys" && activeView !== "autopay" && (
           <section>
             <h2>Output</h2>
             <pre className="output">{busy ? `Working: ${busy}\n\n${output}` : output}</pre>
@@ -1397,12 +1659,14 @@ function buildOkxWalletLink(url) {
 function getConsoleView(pathname) {
   if (pathname === "/console/keys") return "keys";
   if (pathname === "/console/usage") return "usage";
+  if (pathname === "/console/autopay") return "autopay";
   return "recharge";
 }
 
 function consoleViewSubtitle(view) {
   if (view === "keys") return "Create and revoke keys used by clients calling the metered AI gateway.";
   if (view === "usage") return "Inspect account balance, model call records, and payable invoices.";
+  if (view === "autopay") return "Manage autopay pre-approvals and spending limits.";
   return "Create a refundable deposit and receive an API key for metered model calls.";
 }
 

@@ -1412,19 +1412,21 @@ async function handleCreateAutopayCapability(request: Request, env: Env): Promis
   const authRequestId = requireString(authBody.request_id, "request_id");
   const pollToken = requireString(authBody.poll_token, "poll_token");
   const verificationUriComplete = requireString(authBody.verification_uri_complete, "verification_uri_complete");
+  const websocketUriComplete = typeof authBody.websocket_uri_complete === "string" ? authBody.websocket_uri_complete : "";
 
   // Return the auth request details; the client must poll/approve via the autopay worker page
   return jsonResponse({
     capability_id: authRequestId,
     status: "pending_approval",
     verification_uri_complete: verificationUriComplete,
+    websocket_uri_complete: websocketUriComplete,
     poll_token: pollToken,
     autopay_url: autopayUrl,
     total_budget: formatMoney(totalBudget),
     max_single_amount: formatMoney(maxSingleAmount),
     valid_before: validBefore,
     ttl_days: ttlDays,
-    message: "Approve this authorization on the autopay worker page, then call /api/autopay/capabilities/{id}/complete to finalize.",
+    message: "Approve this authorization on the autopay worker page. Polling will complete when done.",
   }, { status: 201 });
 }
 
