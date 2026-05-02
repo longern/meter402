@@ -36,14 +36,22 @@ function App() {
     async function init() {
       setHasWallet(Boolean(window.ethereum));
       if (requestId) {
-        const [details, capabilities] = await Promise.all([
-          fetchJson(`/api/auth/requests/${encodeURIComponent(requestId)}`),
-          fetchJson("/api/capabilities"),
-        ]);
-        setAuthRequest(details);
-        setAllowedOwners(capabilities.allowed_owner_addresses || []);
-        setWalletStatus("Connect an owner wallet to continue.");
-        autoConnectWallet();
+        setAuthLoading(true);
+        setAuthError(false);
+        try {
+          const [details, capabilities] = await Promise.all([
+            fetchJson(`/api/auth/requests/${encodeURIComponent(requestId)}`),
+            fetchJson("/api/capabilities"),
+          ]);
+          setAuthRequest(details);
+          setAllowedOwners(capabilities.allowed_owner_addresses || []);
+          setWalletStatus("Connect an owner wallet to continue.");
+          autoConnectWallet();
+        } catch {
+          setAuthError(true);
+        } finally {
+          setAuthLoading(false);
+        }
       } else {
         // Dashboard mode: check session, then maybe auto-connect wallet
         await checkSession();
@@ -396,6 +404,37 @@ function App() {
     if (authRequest?.return_origin) {
       window.location.assign(authRequest.return_origin);
     }
+  }
+
+  if (authPage && authLoading) {
+    return (
+      <main className="auth-page">
+        <div className="auth-loading">
+          <div className="spinner" />
+          <p>Loading request...</p>
+        </div>
+      </main>
+    );
+  }
+
+  if (authPage && authError) {
+    return (
+      <main className="auth-page">
+        <div className="auth-error">
+          <div className="error-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" fill="none" />
+              <path d="M15 9l-6 6M9 9l6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+          </div>
+          <p>请求不存在或已过期</p>
+          <div className="actions">
+            <button onClick={() => window.close()}>关闭页面</button>
+            <button onClick={() => window.location.href = "/"}>返回主页</button>
+          </div>
+        </div>
+      </main>
+    );
   }
 
   return (

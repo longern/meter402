@@ -12,10 +12,13 @@ routes = [
 [vars]
 AUTOPAY_ALLOWED_OWNERS = ""
 
+# D1 database ID needs to be set after creating the database via:
+#   npx wrangler d1 create meteria402_autopay_audit
+# Then copy the database_id here.
 [[d1_databases]]
 binding = "DB"
 database_name = "meteria402_autopay_audit"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "01e6a8bc-fe69-4a48-80d6-d9032c37f751"
 migrations_dir = "migrations"
 
 [[durable_objects.bindings]]
