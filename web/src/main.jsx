@@ -1026,7 +1026,11 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
 
   async function pollAutopay(path, body) {
     let lastError = "";
-    for (;;) {
+    let consecutiveErrors = 0;
+    const MAX_POLL_ATTEMPTS = 150; // 5 minutes at 2s intervals
+    const MAX_CONSECUTIVE_ERRORS = 5;
+
+    for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, 2000));
       try {
         const json = await request(path, {
@@ -1034,17 +1038,23 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
           body: JSON.stringify(body),
         });
         show(json);
+        consecutiveErrors = 0;
         if (json.status === "settled" || json.status === "settle_failed" || json.status === "denied" || json.status === "active") {
           return json;
         }
       } catch (error) {
         lastError = readableError(error);
-        show({ message: "Polling error: " + lastError });
+        consecutiveErrors += 1;
+        show({ message: "Polling error (" + consecutiveErrors + "/" + MAX_CONSECUTIVE_ERRORS + "): " + lastError });
         if (capDialog) {
           setCapDialog((current) => current ? { ...current, error: lastError } : current);
         }
+        if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+          throw new Error("Polling failed " + MAX_CONSECUTIVE_ERRORS + " times in a row. Last error: " + lastError);
+        }
       }
     }
+    throw new Error("Authorization polling timed out after 5 minutes.");
   }
 
   function openAuthorization(url) {
