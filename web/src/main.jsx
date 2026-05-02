@@ -591,6 +591,88 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
     });
   }
 
+  function hasEthereumBrowser() {
+    return typeof window !== "undefined" && Boolean(window.ethereum);
+  }
+
+  function encodeUsdcTransfer(recipient, amount) {
+    const cleanRecipient = recipient.replace(/^0x/, "").toLowerCase().padStart(64, "0");
+    const amountHex = BigInt(amount).toString(16).padStart(64, "0");
+    return `0xa9059cbb${cleanRecipient}${amountHex}`;
+  }
+
+  async function payDepositDirectly() {
+    await withBusy("directPayment", async () => {
+      const quote = await request("/api/deposits/quote", {
+        method: "POST",
+        body: JSON.stringify({ amount: depositAmount.trim() }),
+      });
+      const paymentId = quote.payment_id;
+      const quoteToken = quote.quote_token;
+      const accept = quote.payment_requirement?.accepts?.[0];
+      if (!accept) throw new Error("Invalid payment requirement from server.");
+
+      const tokenAddress = accept.asset;
+      const recipient = accept.payTo;
+      const amount = accept.amount;
+      const chainId = accept.network === "eip155:8453" ? "0x2105" : "0x2105";
+
+      const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+      const from = accounts[0];
+
+      try {
+        await window.ethereum.request({
+          method: "wallet_switchEthereumChain",
+          params: [{ chainId }],
+        });
+      } catch (switchError) {
+        if (switchError.code === 4902) {
+          await window.ethereum.request({
+            method: "wallet_addEthereumChain",
+            params: [{
+              chainId,
+              chainName: "Base",
+              rpcUrls: ["https://mainnet.base.org"],
+              nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
+              blockExplorerUrls: ["https://basescan.org"],
+            }],
+          });
+        } else {
+          throw switchError;
+        }
+      }
+
+      const data = encodeUsdcTransfer(recipient, amount);
+
+      const txHash = await window.ethereum.request({
+        method: "eth_sendTransaction",
+        params: [{
+          from,
+          to: tokenAddress,
+          data,
+        }],
+      });
+
+      setLastDepositPaymentId(paymentId);
+      setLastDepositQuoteToken(quoteToken);
+
+      const json = await request("/api/deposits/settle", {
+        method: "POST",
+        body: JSON.stringify({
+          payment_id: paymentId,
+          quote_token: quoteToken,
+          tx_hash: txHash,
+          owner_address: from,
+          autopay_url: autopayUrl.trim() || undefined,
+        }),
+      });
+      if (json.api_key) {
+        setNewApiKey(json.api_key);
+      }
+      show(json);
+    });
+  }
+
   async function settleDeposit() {
     await withBusy("settleDeposit", async () => {
       if (!lastDepositPaymentId || !lastDepositQuoteToken) throw new Error("Create a deposit quote first.");
@@ -1004,6 +1086,11 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
                 <button disabled={isBusy} onClick={quoteDeposit}>Create quote</button>
                 <button disabled={isBusy} className="secondary" onClick={settleDeposit}>Settle with dev proof</button>
                 <button disabled={isBusy} className="secondary" onClick={() => openDepositPayment()}>Pay with wallet</button>
+                {hasEthereumBrowser() && (
+                  <button disabled={isBusy} className="secondary" onClick={payDepositDirectly}>
+                    Pay directly
+                  </button>
+                )}
               </div>
               <p className="muted">Development settlement requires ALLOW_DEV_PAYMENTS=true and sends dev_proof=dev-paid.</p>
             </section>

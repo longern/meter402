@@ -15,7 +15,7 @@ run_worker_first = ["/api/*", "/v1/*", "/health"]
 [[d1_databases]]
 binding = "DB"
 database_name = "meteria402"
-database_id = "<your-d1-database-id>"
+database_id = "01e6a8bc-fe69-4a48-80d6-d9032c37f751"
 migrations_dir = "migrations"
 
 [observability.logs]
@@ -23,6 +23,7 @@ enabled = true
 
 [vars]
 AI_GATEWAY_ID = "default"
+UPSTREAM_BASE_URL = ""
 X402_FACILITATOR_URL = "https://api.cdp.coinbase.com/platform/v2/x402"
 X402_NETWORK = "eip155:8453"
 X402_ASSET = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
