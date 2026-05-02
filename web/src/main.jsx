@@ -825,7 +825,7 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
           total_budget: capTotalBudget.trim(),
           max_single_amount: capMaxSingleAmount.trim(),
         },
-        "",
+        json.websocket_uri_complete,
       );
 
       if (result.status === "active" || result.status === "settled") {
@@ -991,10 +991,17 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
       let settled = false;
 
       socket.onerror = () => {
-        if (!settled) reject(new Error("Authorization WebSocket failed."));
+        if (!settled) {
+          settled = true;
+          socket.close();
+          pollAutopay(path, body).then(resolve, reject);
+        }
       };
       socket.onclose = () => {
-        if (!settled) reject(new Error("Authorization WebSocket closed before authorization completed."));
+        if (!settled) {
+          settled = true;
+          pollAutopay(path, body).then(resolve, reject);
+        }
       };
       socket.onmessage = (event) => {
         const message = parseSocketMessage(event.data);
