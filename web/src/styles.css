@@ -1051,10 +1051,7 @@ textarea {
 
 .key-status {
   margin-top: 12px;
-  padding: 12px;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  background: #f8fafc;
+  padding: 8px 0;
 }
 
 .key-status span {
@@ -1071,10 +1068,7 @@ textarea {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
   gap: 8px 14px;
-  padding: 14px;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  background: #f8fafc;
+  padding: 4px 0;
 }
 
 .balance-panel span {
@@ -1129,10 +1123,7 @@ textarea {
 
 .empty-state {
   margin-top: 14px;
-  padding: 16px;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  background: #f8fafc;
+  padding: 8px 0;
 }
 
 .empty-state strong {
@@ -1241,15 +1232,21 @@ textarea {
   gap: 10px;
 }
 
+.data-list {
+  margin-top: 8px;
+}
+
 .data-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  padding: 12px;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  background: #f8fafc;
+  padding: 10px 0;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.data-row:last-child {
+  border-bottom: 0;
 }
 
 .data-row strong {
