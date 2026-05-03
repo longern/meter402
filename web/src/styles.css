@@ -1588,6 +1588,32 @@ textarea {
   }
 }
 
+.input-row {
+  display: flex;
+  align-items: center;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.input-row input {
+  flex: 1;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.input-suffix {
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #6b7280;
+  background: #f8fafc;
+  border-left: 1px solid #e5e7eb;
+  white-space: nowrap;
+}
+
 /* Deposit dialog payment area */
 .deposit-payment-area {
   margin-top: 16px;
