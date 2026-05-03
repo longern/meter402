@@ -39,7 +39,13 @@ export default {
       if (request.method === "POST" && url.pathname === "/api/logout") {
         return handleLogout(request);
       }
+      if (request.method === "POST" && url.pathname === "/api/session/autopay") {
+        return await handleUpdateSessionAutopay(request, env);
+      }
 
+      if (request.method === "GET" && url.pathname === "/api/deposits") {
+        return await handleListDeposits(request, env);
+      }
       if (request.method === "POST" && url.pathname === "/api/deposits/quote") {
         return await handleDepositQuote(request, env);
       }
@@ -263,6 +269,42 @@ function handleLogout(request: Request): Response {
   });
 }
 
+async function handleUpdateSessionAutopay(request: Request, env: Env): Promise<Response> {
+  const session = await requireSession(request, env);
+  const body = await readJsonObject(request);
+  const newAutopayUrl = normalizeAutopayUrl(body.autopay_url ?? body.autopayUrl);
+  
+  if (!newAutopayUrl) {
+    return errorResponse(400, "invalid_autopay_url", "autopay_url is required.");
+  }
+
+  const account = await getAccountByOwner(env, session.owner);
+  const now = new Date().toISOString();
+  const expiresAt = Date.now() + SESSION_TTL_SECONDS * 1000;
+  
+  if (account) {
+    await env.DB.prepare(
+      `UPDATE meteria402_accounts SET autopay_url = ?, updated_at = ? WHERE id = ?`
+    ).bind(newAutopayUrl, now, account.id).run();
+  }
+
+  const sessionToken = await signSessionState(env, {
+    owner: session.owner,
+    autopay_url: newAutopayUrl,
+    expires_at: expiresAt,
+  });
+
+  return jsonResponse({
+    owner: session.owner,
+    autopay_url: newAutopayUrl,
+    expires_at: new Date(expiresAt).toISOString(),
+  }, {
+    headers: {
+      "set-cookie": serializeSessionCookie(request, sessionToken, expiresAt),
+    },
+  });
+}
+
 async function handleDepositQuote(request: Request, env: Env): Promise<Response> {
   const body = await readJsonObject(request);
   const amount = parseMoney(String(body.amount ?? env.DEFAULT_MIN_DEPOSIT ?? "5.00"));
@@ -278,7 +320,7 @@ async function handleDepositQuote(request: Request, env: Env): Promise<Response>
     description: "Refundable Meteria402 API deposit",
   });
 
-  const expiresAt = Date.now() + 10 * 60 * 1000;
+  const expiresAt = Date.now() + 60 * 60 * 1000;
   const quoteToken = await signDepositQuote(env, {
     payment_id: paymentId,
     kind: "deposit",
@@ -335,21 +377,29 @@ async function handleDepositSettle(request: Request, env: Env): Promise<Response
   }
 
   const existingPayment = await env.DB.prepare(
-    `SELECT status FROM meteria402_payments WHERE id = ? AND kind = 'deposit'`
+    `SELECT status, account_id FROM meteria402_payments WHERE id = ? AND kind = 'deposit'`
   )
     .bind(paymentId)
-    .first<{ status: string }>();
-  if (existingPayment?.status === "settled") {
-    return errorResponse(409, "payment_already_settled", "This deposit payment has already been settled.");
+    .first<{ status: string; account_id: string | null }>();
+
+  // ─── Idempotent settle: already settled → return existing account info ───
+  if (existingPayment?.status === "settled" && existingPayment.account_id) {
+    const account = await env.DB.prepare(
+      `SELECT id, deposit_balance, owner_address FROM meteria402_accounts WHERE id = ?`
+    ).bind(existingPayment.account_id).first<{ id: string; deposit_balance: number; owner_address: string | null }>();
+
+    if (account) {
+      return jsonResponse({
+        account_id: account.id,
+        deposit_balance: formatMoney(account.deposit_balance),
+        owner_address: account.owner_address,
+        message: "This deposit was already settled.",
+      });
+    }
   }
 
-  const accountId = makeId("acct");
-  const apiKey = await createApiKey();
-  const apiKeyHash = await sha256Hex(apiKey.secret);
   const now = new Date().toISOString();
   const payloadHash = await sha256Hex(JSON.stringify(paymentPayload ?? { tx_hash: txHash, dev_proof: devProof, payment_id: paymentId }));
-  const minDeposit = parseMoney(env.DEFAULT_MIN_DEPOSIT ?? "5.00");
-  const concurrencyLimit = parsePositiveInt(env.DEFAULT_CONCURRENCY_LIMIT ?? "1", 1);
   const existingPayload = await env.DB.prepare(
     `SELECT id FROM meteria402_payments WHERE x402_payload_hash = ?`
   )
@@ -358,12 +408,46 @@ async function handleDepositSettle(request: Request, env: Env): Promise<Response
   if (existingPayload) {
     return errorResponse(409, "payment_already_used", "This payment payload has already been settled.");
   }
+
+  const minDeposit = parseMoney(env.DEFAULT_MIN_DEPOSIT ?? "5.00");
+  const concurrencyLimit = parsePositiveInt(env.DEFAULT_CONCURRENCY_LIMIT ?? "1", 1);
+
+  // ─── Check if owner already has an account — if so, top up instead of creating new ───
+  let existingAccount: { id: string; deposit_balance: number } | null = null;
   if (ownerAddress) {
-    const existingOwnerAccount = await getAccountByOwner(env, ownerAddress);
-    if (existingOwnerAccount) {
-      return errorResponse(409, "owner_account_exists", "This owner wallet already has an account.");
-    }
+    existingAccount = await getAccountByOwner(env, ownerAddress);
   }
+
+  if (existingAccount) {
+    // Top-up existing account
+    const newBalance = existingAccount.deposit_balance + quote.amount;
+    await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE meteria402_accounts SET deposit_balance = ?, updated_at = ? WHERE id = ?`
+      ).bind(newBalance, now, existingAccount.id),
+      env.DB.prepare(
+        `INSERT INTO meteria402_payments (id, account_id, kind, amount, currency, status, x402_payload_hash, tx_hash, payment_requirement_json, response_json, created_at, settled_at)
+         VALUES (?, ?, 'deposit', ?, 'USD', 'settled', ?, ?, ?, ?, ?, ?)`
+      ).bind(paymentId, existingAccount.id, quote.amount, payloadHash, settlement.txHash ?? null, paymentRequirementJson, JSON.stringify(settlement.raw ?? {}), now, now),
+      env.DB.prepare(
+        `INSERT INTO meteria402_ledger_entries (id, account_id, type, amount, currency, related_payment_id, created_at)
+         VALUES (?, ?, 'deposit_paid', ?, 'USD', ?, ?)`
+      ).bind(makeId("led"), existingAccount.id, quote.amount, paymentId, now),
+    ]);
+
+    return jsonResponse({
+      account_id: existingAccount.id,
+      deposit_balance: formatMoney(newBalance),
+      tx_hash: settlement.txHash,
+      payer_address: settlement.payerAddress,
+      message: "Deposit topped up successfully.",
+    });
+  }
+
+  // ─── Create new account for first-time deposit ───
+  const accountId = makeId("acct");
+  const apiKey = await createApiKey();
+  const apiKeyHash = await sha256Hex(apiKey.secret);
 
   await env.DB.batch([
     env.DB.prepare(
@@ -611,6 +695,51 @@ async function handleListInvoices(request: Request, env: Env): Promise<Response>
       amount_due: formatMoney(row.amount_due),
     })),
   });
+}
+
+async function handleListDeposits(request: Request, env: Env): Promise<Response> {
+  const account = await requireAccountFromSession(request, env);
+
+  const rows = await env.DB.prepare(
+    `SELECT id, amount, currency, status, tx_hash, response_json, created_at, settled_at
+     FROM meteria402_payments
+     WHERE account_id = ? AND kind = 'deposit'
+     ORDER BY settled_at DESC
+     LIMIT 100`
+  )
+    .bind(account.id)
+    .all<{
+      id: string;
+      amount: number;
+      currency: string;
+      status: string;
+      tx_hash: string | null;
+      response_json: string;
+      created_at: string;
+      settled_at: string | null;
+    }>();
+
+  const deposits = rows.results.map((row) => {
+    let payerAddress: string | null = null;
+    try {
+      const parsed = JSON.parse(row.response_json) as Record<string, unknown>;
+      payerAddress = typeof parsed.payerAddress === "string" ? parsed.payerAddress : null;
+      if (!payerAddress && typeof parsed.payer === "string") payerAddress = parsed.payer;
+    } catch {
+      // ignore parse error
+    }
+    return {
+      id: row.id,
+      amount: formatMoney(row.amount),
+      currency: row.currency,
+      status: row.status,
+      tx_hash: row.tx_hash,
+      payer_address: payerAddress,
+      settled_at: row.settled_at,
+    };
+  });
+
+  return jsonResponse({ deposits });
 }
 
 async function handleListRequests(request: Request, env: Env): Promise<Response> {
@@ -1396,6 +1525,7 @@ async function handleCreateAutopayCapability(request: Request, env: Env): Promis
         network: env.X402_NETWORK || BASE_MAINNET,
         asset: env.X402_ASSET || BASE_USDC,
         maxSingleAmount: x402AmountFromMicroUsd(maxSingleAmount, env),
+        totalBudget: x402AmountFromMicroUsd(totalBudget, env),
         validBefore,
       },
       policyValidBefore: validBefore,

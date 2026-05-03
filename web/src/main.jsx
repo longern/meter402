@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import QRCode from "qrcode";
+import DepositDialog from "./DepositDialog";
 import "./styles.css";
 
 const AUTOPAY_ENDPOINT_STORAGE_KEY = "meteria402_last_autopay_endpoint";
@@ -507,7 +508,6 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeView, setActiveView] = useState(() => getConsoleView(window.location.pathname));
   const [autopayUrl, setAutopayUrl] = useState(initialIdentity?.autopay_url || DEFAULT_AUTOPAY_URL);
-  const [depositAmount, setDepositAmount] = useState("5.00");
   const [newApiKey, setNewApiKey] = useState("");
   const [newKeyName, setNewKeyName] = useState("");
   const [newKeyExpiresAt, setNewKeyExpiresAt] = useState("");
@@ -515,8 +515,6 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
   const [keyDialogError, setKeyDialogError] = useState("");
   const [paymentDialog, setPaymentDialog] = useState(null);
   const [paymentPayload, setPaymentPayload] = useState("");
-  const [lastDepositPaymentId, setLastDepositPaymentId] = useState("");
-  const [lastDepositQuoteToken, setLastDepositQuoteToken] = useState("");
   const [autopayWalletBalance, setAutopayWalletBalance] = useState(null);
   const [autopayWalletBalanceError, setAutopayWalletBalanceError] = useState("");
   const [capabilities, setCapabilities] = useState([]);
@@ -526,9 +524,14 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
   const [capMaxSingleAmount, setCapMaxSingleAmount] = useState("5.00");
   const [capTtlDays, setCapTtlDays] = useState(7);
   const [capDialog, setCapDialog] = useState(null);
+  const [capApprovalCopied, setCapApprovalCopied] = useState(false);
+  const capAbortRef = useRef(null);
+  const [editEndpointOpen, setEditEndpointOpen] = useState(false);
+  const [depositDialogOpen, setDepositDialogOpen] = useState(false);
   const [account, setAccount] = useState(null);
   const [apiKeys, setApiKeys] = useState([]);
   const [lastInvoices, setLastInvoices] = useState([]);
+  const [deposits, setDeposits] = useState([]);
   const [requests, setRequests] = useState([]);
   const [output, setOutput] = useState("");
   const [busy, setBusy] = useState("");
@@ -543,9 +546,9 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
   }, []);
 
   useEffect(() => {
-    document.body.classList.toggle("sidebar-locked", sidebarOpen || createKeyOpen || Boolean(paymentDialog));
+    document.body.classList.toggle("sidebar-locked", sidebarOpen || createKeyOpen || Boolean(paymentDialog) || editEndpointOpen || depositDialogOpen);
     return () => document.body.classList.remove("sidebar-locked");
-  }, [sidebarOpen, createKeyOpen, paymentDialog]);
+  }, [sidebarOpen, createKeyOpen, paymentDialog, editEndpointOpen, depositDialogOpen]);
 
   useEffect(() => {
     setIdentity(initialIdentity);
@@ -555,6 +558,8 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
   useEffect(() => {
     if (activeView === "recharge" && identity?.owner) {
       loadAutopayWalletBalance();
+      loadAccount();
+      loadDeposits();
     }
   }, [activeView, identity?.owner]);
 
@@ -594,172 +599,6 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
     }
   }
 
-  async function quoteDeposit() {
-    await withBusy("quoteDeposit", async () => {
-      const json = await request("/api/deposits/quote", {
-        method: "POST",
-        body: JSON.stringify({ amount: depositAmount.trim() }),
-      });
-      setLastDepositPaymentId(json.payment_id);
-      setLastDepositQuoteToken(json.quote_token || "");
-      show(json);
-      await openDepositPayment(json.payment_id, json.quote_token || "");
-    });
-  }
-
-  function hasEthereumBrowser() {
-    return typeof window !== "undefined" && Boolean(window.ethereum);
-  }
-
-  function encodeUsdcTransfer(recipient, amount) {
-    const cleanRecipient = recipient.replace(/^0x/, "").toLowerCase().padStart(64, "0");
-    const amountHex = BigInt(amount).toString(16).padStart(64, "0");
-    return `0xa9059cbb${cleanRecipient}${amountHex}`;
-  }
-
-  async function payDepositDirectly() {
-    await withBusy("directPayment", async () => {
-      const quote = await request("/api/deposits/quote", {
-        method: "POST",
-        body: JSON.stringify({ amount: depositAmount.trim() }),
-      });
-      const paymentId = quote.payment_id;
-      const quoteToken = quote.quote_token;
-      const accept = quote.payment_requirement?.accepts?.[0];
-      if (!accept) throw new Error("Invalid payment requirement from server.");
-
-      const tokenAddress = accept.asset;
-      const recipient = accept.payTo;
-      const amount = accept.amount;
-      const chainId = accept.network === "eip155:8453" ? "0x2105" : "0x2105";
-
-      const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
-      const from = accounts[0];
-
-      try {
-        await window.ethereum.request({
-          method: "wallet_switchEthereumChain",
-          params: [{ chainId }],
-        });
-      } catch (switchError) {
-        if (switchError.code === 4902) {
-          await window.ethereum.request({
-            method: "wallet_addEthereumChain",
-            params: [{
-              chainId,
-              chainName: "Base",
-              rpcUrls: ["https://mainnet.base.org"],
-              nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
-              blockExplorerUrls: ["https://basescan.org"],
-            }],
-          });
-        } else {
-          throw switchError;
-        }
-      }
-
-      const data = encodeUsdcTransfer(recipient, amount);
-
-      const txHash = await window.ethereum.request({
-        method: "eth_sendTransaction",
-        params: [{
-          from,
-          to: tokenAddress,
-          data,
-        }],
-      });
-
-      setLastDepositPaymentId(paymentId);
-      setLastDepositQuoteToken(quoteToken);
-
-      const json = await request("/api/deposits/settle", {
-        method: "POST",
-        body: JSON.stringify({
-          payment_id: paymentId,
-          quote_token: quoteToken,
-          tx_hash: txHash,
-          owner_address: from,
-          autopay_url: autopayUrl.trim() || undefined,
-        }),
-      });
-      if (json.api_key) {
-        setNewApiKey(json.api_key);
-      }
-      show(json);
-    });
-  }
-
-  async function settleDeposit() {
-    await withBusy("settleDeposit", async () => {
-      if (!lastDepositPaymentId || !lastDepositQuoteToken) throw new Error("Create a deposit quote first.");
-      const parsedPayload = paymentPayload.trim() ? JSON.parse(paymentPayload.trim()) : null;
-      const json = await request("/api/deposits/settle", {
-        method: "POST",
-        body: JSON.stringify({
-          payment_id: lastDepositPaymentId,
-          quote_token: lastDepositQuoteToken,
-          payment_payload: parsedPayload,
-          dev_proof: "dev-paid",
-          autopay_url: autopayUrl.trim() || undefined,
-        }),
-      });
-      if (json.api_key) {
-        setNewApiKey(json.api_key);
-      }
-      show(json);
-    });
-  }
-
-  async function openDepositPayment(paymentId = lastDepositPaymentId, quoteToken = lastDepositQuoteToken) {
-    await withBusy("walletPayment", async () => {
-      if (!paymentId || !quoteToken) throw new Error("Create a deposit quote first.");
-      setPaymentDialog({
-        status: "preparing",
-        qr: "",
-        url: "",
-        error: "",
-      });
-      const started = await request(`/api/deposits/${encodeURIComponent(paymentId)}/autopay/start`, {
-        method: "POST",
-        body: JSON.stringify({
-          quote_token: quoteToken,
-          autopay_url: autopayUrl.trim(),
-        }),
-      });
-      const qr = started.verification_uri_complete
-        ? await QRCode.toDataURL(started.verification_uri_complete, {
-          margin: 1,
-          scale: 8,
-          color: {
-            dark: "#111827",
-            light: "#ffffff",
-          },
-        })
-        : "";
-      setPaymentDialog({
-        status: "waiting",
-        qr,
-        url: started.verification_uri_complete,
-        error: "",
-      });
-      show({
-        message: "Scan the QR with your wallet, then this page will wait for payment settlement.",
-        ...started,
-      });
-      const settled = await waitForAutopayAuthorization(
-        `/api/deposits/${encodeURIComponent(paymentId)}/autopay/complete`,
-        { autopay_state: started.autopay_state },
-        started.websocket_uri_complete,
-      );
-      if (settled?.settlement?.api_key) {
-        setNewApiKey(settled.settlement.api_key);
-      }
-      if (settled?.status === "settled") {
-        setPaymentDialog((current) => current ? { ...current, status: "settled", error: "" } : current);
-      }
-    });
-  }
-
   async function loadAutopayWalletBalance() {
     if (!identity?.owner) return;
     setBusy("loadWalletBalance");
@@ -773,6 +612,18 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
     } finally {
       setBusy("");
     }
+  }
+
+  async function updateAutopayEndpoint() {
+    await withBusy("updateAutopay", async () => {
+      const json = await request("/api/session/autopay", {
+        method: "POST",
+        body: JSON.stringify({ autopay_url: autopayUrl.trim() }),
+      });
+      setIdentity((current) => current ? { ...current, autopay_url: json.autopay_url } : current);
+      setEditEndpointOpen(false);
+      show({ message: "Autopay endpoint updated.", autopay_url: json.autopay_url });
+    });
   }
 
   async function loadCapabilities() {
@@ -791,14 +642,19 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
     event.preventDefault();
     setCapCreateOpen(false);
     await withBusy("createCapability", async () => {
+      const controller = new AbortController();
+      capAbortRef.current = controller;
+      const signal = controller.signal;
+
       const json = await request("/api/autopay/capabilities", {
         method: "POST",
         body: JSON.stringify({
           total_budget: capTotalBudget.trim(),
           max_single_amount: capMaxSingleAmount.trim(),
           ttl_days: capTtlDays,
-          autopay_url: autopayUrl.trim() || undefined,
+          autopay_url: identity?.autopay_url || undefined,
         }),
+        signal,
       });
 
       const qr = json.verification_uri_complete
@@ -826,6 +682,7 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
           max_single_amount: capMaxSingleAmount.trim(),
         },
         json.websocket_uri_complete,
+        signal,
       );
 
       if (result.status === "active" || result.status === "settled") {
@@ -860,8 +717,23 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
   }
 
   function closeCapDialog() {
-    if (busy === "createCapability" && capDialog?.status === "waiting") return;
+    if (capAbortRef.current) {
+      capAbortRef.current.abort();
+      capAbortRef.current = null;
+    }
     setCapDialog(null);
+    setCapApprovalCopied(false);
+  }
+
+  async function copyCapApprovalLink() {
+    if (!capDialog?.url) return;
+    try {
+      await navigator.clipboard.writeText(capDialog.url);
+      setCapApprovalCopied(true);
+      window.setTimeout(() => setCapApprovalCopied(false), 1400);
+    } catch {
+      setCapApprovalCopied(false);
+    }
   }
 
   async function loadAccount() {
@@ -893,6 +765,24 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
     setNewApiKey("");
     setNewKeyName("");
     setNewKeyExpiresAt("");
+  }
+
+  function openEditEndpointDialog() {
+    setAutopayUrl(identity?.autopay_url || "");
+    setEditEndpointOpen(true);
+  }
+
+  function closeEditEndpointDialog() {
+    setEditEndpointOpen(false);
+  }
+
+  function openDepositDialog() {
+    setDepositDialogOpen(true);
+  }
+
+  function closeDepositDialog() {
+    if (busy === "walletPayment" && paymentDialog?.status !== "settled" && paymentDialog?.status !== "failed") return;
+    setDepositDialogOpen(false);
   }
 
   function closePaymentDialog() {
@@ -945,6 +835,14 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
     });
   }
 
+  async function loadDeposits() {
+    await withBusy("loadDeposits", async () => {
+      const json = await request("/api/deposits");
+      setDeposits(json.deposits || []);
+      show(json);
+    });
+  }
+
   async function loadRequests() {
     await withBusy("loadRequests", async () => {
       const json = await request("/api/requests");
@@ -981,26 +879,35 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
     });
   }
 
-  async function waitForAutopayAuthorization(path, body, websocketUrl) {
-    if (!websocketUrl) {
-      return await pollAutopay(path, body);
+  async function waitForAutopayAuthorization(path, body, websocketUrl, signal) {
+    if (!websocketUrl || (signal && signal.aborted)) {
+      return await pollAutopay(path, body, signal);
     }
 
     return await new Promise((resolve, reject) => {
       const socket = new WebSocket(websocketUrl);
       let settled = false;
 
+      function onAbort() {
+        if (!settled) {
+          settled = true;
+          socket.close();
+          reject(new Error("Authorization cancelled."));
+        }
+      }
+      if (signal) signal.addEventListener("abort", onAbort);
+
       socket.onerror = () => {
         if (!settled) {
           settled = true;
           socket.close();
-          pollAutopay(path, body).then(resolve, reject);
+          pollAutopay(path, body, signal).then(resolve, reject);
         }
       };
       socket.onclose = () => {
         if (!settled) {
           settled = true;
-          pollAutopay(path, body).then(resolve, reject);
+          pollAutopay(path, body, signal).then(resolve, reject);
         }
       };
       socket.onmessage = (event) => {
@@ -1015,6 +922,7 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
           request(path, {
             method: "POST",
             body: JSON.stringify(body),
+            signal,
           }).then((json) => {
             show(json);
             resolve(json);
@@ -1031,18 +939,25 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
     });
   }
 
-  async function pollAutopay(path, body) {
+  async function pollAutopay(path, body, signal) {
     let lastError = "";
     let consecutiveErrors = 0;
     const MAX_POLL_ATTEMPTS = 150; // 5 minutes at 2s intervals
     const MAX_CONSECUTIVE_ERRORS = 5;
 
     for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt++) {
+      if (signal?.aborted) {
+        throw new Error("Authorization cancelled.");
+      }
       await new Promise((resolve) => setTimeout(resolve, 2000));
+      if (signal?.aborted) {
+        throw new Error("Authorization cancelled.");
+      }
       try {
         const json = await request(path, {
           method: "POST",
           body: JSON.stringify(body),
+          signal,
         });
         show(json);
         consecutiveErrors = 0;
@@ -1050,6 +965,9 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
           return json;
         }
       } catch (error) {
+        if (signal?.aborted) {
+          throw new Error("Authorization cancelled.");
+        }
         lastError = readableError(error);
         consecutiveErrors += 1;
         show({ message: "Polling error (" + consecutiveErrors + "/" + MAX_CONSECUTIVE_ERRORS + "): " + lastError });
@@ -1164,17 +1082,72 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
         <div className="console-header">
           <div>
             <h1>{activeItem.label}</h1>
-            <p>{consoleViewSubtitle(activeView)}</p>
           </div>
         </div>
 
         {activeView === "recharge" && (
           <>
             <section>
-              <h2>Payment Wallet</h2>
+              <div className="section-header">
+                <h2>Account Balance</h2>
+              </div>
+              {account ? (
+                <div className="balance-panel">
+                  <span>Deposit Balance</span>
+                  <strong>{account.deposit_balance} USDC</strong>
+                  <span>Unpaid Invoices</span>
+                  <strong>{account.unpaid_invoice_total} USDC</strong>
+                  <span>Status</span>
+                  <strong>{account.status}</strong>
+                </div>
+              ) : (
+                <p className="muted">Loading account...</p>
+              )}
+              <div className="row" style={{ marginTop: 12 }}>
+                <button disabled={isBusy} className="secondary" onClick={() => openDepositDialog()}>
+                  Add deposit
+                </button>
+              </div>
+            </section>
+
+            <section>
+              <div className="section-header">
+                <h2>Autopay Wallet</h2>
+              </div>
               {identity?.owner ? (
                 <>
                   <div className="balance-panel">
+                    <span>Endpoint</span>
+                    <div className="endpoint-row">
+                      <strong className="mono">{identity?.autopay_url || "—"}</strong>
+                      <div className="endpoint-actions">
+                        <a
+                          href={identity?.autopay_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="icon-button open-link"
+                          aria-label="Open endpoint"
+                          onClick={(e) => { if (!identity?.autopay_url) e.preventDefault(); }}
+                        >
+                          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                            <path d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                        </a>
+                        <button
+                          type="button"
+                          className="icon-button open-link"
+                          aria-label="Edit endpoint"
+                          onClick={() => openEditEndpointDialog()}
+                        >
+                          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                            <g transform="translate(2.4 2.4) scale(0.8)">
+                              <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+                              <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+                            </g>
+                          </svg>
+                        </button>
+                      </div>
+                    </div>
                     <span>Address</span>
                     <strong className="mono">
                       {autopayWalletBalance?.address
@@ -1204,55 +1177,111 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
               )}
             </section>
 
-	            <section>
-	              <h2>Create Deposit Quote</h2>
-	              <div className="grid">
-	                <label>
-	                  <span>Deposit amount</span>
-	                  <input value={depositAmount} inputMode="decimal" onChange={(event) => setDepositAmount(event.target.value)} />
-	                </label>
-	                <label>
-	                  <span>Autopay endpoint</span>
-	                  <input value={autopayUrl} autoComplete="url" onChange={(event) => setAutopayUrl(event.target.value)} />
-	                </label>
-	              </div>
-              <div className="row">
-                <button disabled={isBusy} onClick={quoteDeposit}>Create quote</button>
-                <button disabled={isBusy} className="secondary" onClick={settleDeposit}>Settle with dev proof</button>
-                <button disabled={isBusy} className="secondary" onClick={() => openDepositPayment()}>Pay with wallet</button>
-                {hasEthereumBrowser() && (
-                  <button disabled={isBusy} className="secondary" onClick={payDepositDirectly}>
-                    Pay directly
-                  </button>
-                )}
+            <section>
+              <div className="section-header">
+                <h2>Deposit History</h2>
+                <button
+                  className="icon-button plain"
+                  type="button"
+                  aria-label="Refresh deposit history"
+                  disabled={isBusy}
+                  onClick={loadDeposits}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M23 4v6h-6" />
+                    <path d="M1 20v-6h6" />
+                    <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" />
+                  </svg>
+                </button>
               </div>
-              <p className="muted">Development settlement requires ALLOW_DEV_PAYMENTS=true and sends dev_proof=dev-paid.</p>
+              {deposits.length ? (
+                <div className="data-list">
+                  {deposits.map((item) => (
+                    <div className="data-row" key={item.id}>
+                      <div>
+                        <strong>{item.amount} {item.currency}</strong>
+                        <span>
+                          {item.status}
+                          {item.payer_address ? ` · ${shortAddress(item.payer_address)}` : ""}
+                          {item.settled_at ? ` · ${formatDateTime(item.settled_at)}` : ""}
+                        </span>
+                      </div>
+                      {item.tx_hash && (
+                        <a
+                          className="button-link secondary"
+                          href={`https://basescan.org/tx/${item.tx_hash}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          View tx
+                        </a>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="muted">No deposits yet. Add a deposit to get started.</p>
+              )}
             </section>
 
-            <section>
-              <h2>Payment Payload</h2>
-              <textarea
-                value={paymentPayload}
-                placeholder="Paste a signed x402 payment payload here for facilitator settlement."
-                onChange={(event) => setPaymentPayload(event.target.value)}
+            {editEndpointOpen && (
+              <div className="modal-layer" role="presentation">
+                <button className="modal-scrim" type="button" aria-label="Close edit endpoint dialog" onClick={closeEditEndpointDialog} />
+                <section className="modal-panel" role="dialog" aria-modal="true" aria-labelledby="edit-endpoint-title">
+                  <div className="modal-header">
+                    <div>
+                      <h2 id="edit-endpoint-title">Edit Autopay Endpoint</h2>
+                    </div>
+                    <button className="icon-button modal-close" type="button" aria-label="Close" onClick={closeEditEndpointDialog}>
+                      <svg className="close-icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M7 7l10 10M17 7L7 17" />
+                      </svg>
+                    </button>
+                  </div>
+                  <div className="modal-body">
+                    <div className="grid single">
+                      <label>
+                        <span>Endpoint URL</span>
+                        <input value={autopayUrl} autoComplete="url" onChange={(event) => setAutopayUrl(event.target.value)} />
+                      </label>
+                    </div>
+                    <div className="modal-actions">
+                      <button type="button" className="secondary" onClick={closeEditEndpointDialog}>Cancel</button>
+                      <button type="button" disabled={isBusy || !autopayUrl.trim()} onClick={updateAutopayEndpoint}>Save</button>
+                    </div>
+                  </div>
+                </section>
+              </div>
+            )}
+
+            {depositDialogOpen && (
+              <DepositDialog
+                open={depositDialogOpen}
+                onClose={closeDepositDialog}
+                request={request}
+                withBusy={withBusy}
+                isBusy={isBusy}
+                show={show}
+                identity={identity}
+                setNewApiKey={setNewApiKey}
+                waitForAutopayAuthorization={waitForAutopayAuthorization}
+                loadAccount={loadAccount}
               />
-            </section>
+            )}
           </>
         )}
 
         {activeView === "keys" && (
           <>
             <section>
-              <div className="console-header">
-                <div>
-                  <h2>API Keys</h2>
-                  <p className="muted">Manage keys for OpenAI-compatible API access. Keys are generated by the Worker and shown once.</p>
-                </div>
+              <div className="section-header">
+                <h2>API Keys</h2>
                 <div className="row">
                   <button disabled={isBusy} onClick={loadApiKeys}>Refresh</button>
                   <button disabled={isBusy} className="secondary" onClick={openCreateKeyDialog}>Create key</button>
                 </div>
               </div>
+              <p className="muted">Manage keys for OpenAI-compatible API access. Keys are generated by the Worker and shown once.</p>
 
               {apiKeys.length ? (
                 <div className="data-list">
@@ -1321,7 +1350,7 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
                   </svg>
                 </button>
               </div>
-              <form onSubmit={createManagedApiKey}>
+              <form className="modal-body" onSubmit={createManagedApiKey}>
                 <div className="grid single">
                   <label>
                     <span>Name</span>
@@ -1365,7 +1394,7 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
                   </svg>
                 </button>
               </div>
-              <form onSubmit={createCapability}>
+              <form className="modal-body" onSubmit={createCapability}>
                 <div className="grid single">
                   <label>
                     <span>Total budget (USDC)</span>
@@ -1403,7 +1432,7 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
                   <p className="muted">
                     {capDialog.status === "done"
                       ? "Your autopay limit has been saved and is now active."
-                      : "Scan the QR or open the link in your wallet, then this page will finalize the limit."}
+                      : "Approve the limit in your wallet to finalize the setup."}
                   </p>
                 </div>
                 <button className="icon-button modal-close" type="button" aria-label="Close" onClick={closeCapDialog}>
@@ -1412,39 +1441,74 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
                   </svg>
                 </button>
               </div>
-              <div className="payment-qr-panel">
-                {capDialog.qr ? (
-                  <img src={capDialog.qr} alt="Wallet approval QR code" />
-                ) : (
-                  <div className="payment-qr-placeholder">Preparing QR</div>
-                )}
-                <div>
-                  <strong>
-                    {capDialog.status === "done"
-                      ? "Done"
-                      : capDialog.status === "failed"
-                      ? "Failed"
-                      : "Waiting for wallet signature"}
-                  </strong>
-                  <p className="muted">
-                    {capDialog.status === "done"
-                      ? "The pre-approval is now active."
-                      : capDialog.status === "failed"
-                      ? "Something went wrong. You can try creating the limit again."
-                      : "After approval, this page will complete the limit setup automatically."}
-                  </p>
-                  {capDialog.error && <p className="form-error">{capDialog.error}</p>}
-                  <div className="row">
-                    {capDialog.url && (
-                      <>
-                        <a className="button-link secondary" href={capDialog.url} target="_blank" rel="noreferrer">Open link</a>
-                        <a className="button-link secondary" href={buildCoinbaseWalletLink(capDialog.url)} target="_blank" rel="noreferrer">Coinbase</a>
-                        <a className="button-link secondary" href={buildOkxWalletLink(capDialog.url)} target="_blank" rel="noreferrer">OKX</a>
-                      </>
+              <div className="modal-body">
+                <div className="payment-qr-panel">
+                  <div className="cap-qr-desktop">
+                    {capDialog.qr ? (
+                      <img src={capDialog.qr} alt="Wallet approval QR code" />
+                    ) : (
+                      <div className="payment-qr-placeholder">Preparing QR</div>
                     )}
-                    {(capDialog.status === "done" || capDialog.status === "failed") && (
-                      <button type="button" onClick={closeCapDialog}>Close</button>
-                    )}
+                  </div>
+                  <div className="cap-qr-mobile">
+                    <div className="wallet-row">
+                      {capDialog.url && (
+                        <>
+                          <a className="wallet-icon-link" href={capDialog.url} target="_blank" rel="noreferrer" aria-label="Open approval link">
+                            <svg viewBox="0 0 24 24" aria-hidden="true" width="22" height="22">
+                              <path d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+                            </svg>
+                          </a>
+                          <a className="wallet-icon-link" href={buildCoinbaseWalletLink(capDialog.url)} target="_blank" rel="noreferrer" aria-label="Open in Coinbase Wallet">
+                            <img src="/wallet-icons/coinbase-wallet.svg" alt="" width="22" height="22" />
+                          </a>
+                          <a className="wallet-icon-link" href={buildOkxWalletLink(capDialog.url)} target="_blank" rel="noreferrer" aria-label="Open in OKX Wallet">
+                            <img src="/wallet-icons/okx-wallet.svg" alt="" width="22" height="22" />
+                          </a>
+                        </>
+                      )}
+                    </div>
+                    <p className="wallet-mobile-fallback">or manually copy the link and open it in your wallet app browser.</p>
+                    <div className="approval-link-box">
+                      <div className="approval-link-header">
+                        <span>Approval link</span>
+                        <button className={`approval-copy-button${capApprovalCopied ? " copied" : ""}`} type="button" onClick={copyCapApprovalLink} disabled={!capDialog.url} aria-label={capApprovalCopied ? "Copied" : "Copy approval link"} title={capApprovalCopied ? "Copied" : "Copy approval link"}>
+                          {capApprovalCopied ? (
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              <path d="M5 13l4 4L19 7" />
+                            </svg>
+                          ) : (
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              <rect x="9" y="9" width="10" height="10" rx="2" />
+                              <path d="M6 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1" />
+                            </svg>
+                          )}
+                        </button>
+                      </div>
+                      <code>{capDialog.url || "Preparing link..."}</code>
+                    </div>
+                  </div>
+                  <div>
+                    <strong>
+                      {capDialog.status === "done"
+                        ? "Done"
+                        : capDialog.status === "failed"
+                        ? "Failed"
+                        : "Waiting for wallet signature"}
+                    </strong>
+                    <p className="muted">
+                      {capDialog.status === "done"
+                        ? "The pre-approval is now active."
+                        : capDialog.status === "failed"
+                        ? "Something went wrong. You can try creating the limit again."
+                        : "After approval, this page will complete the limit setup automatically."}
+                    </p>
+                    {capDialog.error && <p className="form-error">{capDialog.error}</p>}
+                    <div className="wallet-row">
+                      {(capDialog.status === "done" || capDialog.status === "failed") && (
+                        <button type="button" onClick={closeCapDialog}>Close</button>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1467,36 +1531,37 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
                   </svg>
                 </button>
               </div>
-
-              <div className="payment-qr-panel">
-                {paymentDialog.qr ? (
-                  <img src={paymentDialog.qr} alt="Wallet payment QR code" />
-                ) : (
-                  <div className="payment-qr-placeholder">Preparing QR</div>
-                )}
-                <div>
-                  <strong>
-                    {paymentDialog.status === "settled"
-                      ? "Payment settled"
-                      : paymentDialog.status === "failed"
-                      ? "Payment failed"
-                      : "Waiting for wallet signature"}
-                  </strong>
-                  <p className="muted">
-                    {paymentDialog.status === "settled"
-                      ? "Your API key has been stored locally."
-                      : "After approval, this page will settle the payment and store the generated API key."}
-                  </p>
-                  {paymentDialog.error && <p className="form-error">{paymentDialog.error}</p>}
-                  <div className="row">
-                    {paymentDialog.url && (
-                      <a className="button-link secondary" href={paymentDialog.url} target="_blank" rel="noreferrer">
-                        Open link
-                      </a>
-                    )}
-                    {(paymentDialog.status === "settled" || paymentDialog.status === "failed") && (
-                      <button type="button" onClick={closePaymentDialog}>Close</button>
-                    )}
+              <div className="modal-body">
+                <div className="payment-qr-panel">
+                  {paymentDialog.qr ? (
+                    <img src={paymentDialog.qr} alt="Wallet payment QR code" />
+                  ) : (
+                    <div className="payment-qr-placeholder">Preparing QR</div>
+                  )}
+                  <div>
+                    <strong>
+                      {paymentDialog.status === "settled"
+                        ? "Payment settled"
+                        : paymentDialog.status === "failed"
+                        ? "Payment failed"
+                        : "Waiting for wallet signature"}
+                    </strong>
+                    <p className="muted">
+                      {paymentDialog.status === "settled"
+                        ? "Your API key has been stored locally."
+                        : "After approval, this page will settle the payment and store the generated API key."}
+                    </p>
+                    {paymentDialog.error && <p className="form-error">{paymentDialog.error}</p>}
+                    <div className="row">
+                      {paymentDialog.url && (
+                        <a className="button-link secondary" href={paymentDialog.url} target="_blank" rel="noreferrer">
+                          Open link
+                        </a>
+                      )}
+                      {(paymentDialog.status === "settled" || paymentDialog.status === "failed") && (
+                        <button type="button" onClick={closePaymentDialog}>Close</button>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1507,7 +1572,9 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
         {activeView === "usage" && (
           <>
             <section>
-              <h2>Account</h2>
+              <div className="section-header">
+                <h2>Account</h2>
+              </div>
               <div className="row">
                 <button disabled={isBusy} onClick={loadAccount}>Load account</button>
                 <button disabled={isBusy} className="secondary" onClick={loadRequests}>Load calls</button>
@@ -1524,7 +1591,9 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
             </section>
 
             <section>
-              <h2>Model Calls</h2>
+              <div className="section-header">
+                <h2>Model Calls</h2>
+              </div>
               {requests.length ? (
                 <div className="data-list">
                   {requests.map((item) => (
@@ -1543,7 +1612,9 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
             </section>
 
             <section>
-              <h2>Invoices</h2>
+              <div className="section-header">
+                <h2>Invoices</h2>
+              </div>
               {lastInvoices.length ? (
                 <div className="data-list">
                   {lastInvoices.map((item) => (
@@ -1565,16 +1636,14 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
         {activeView === "autopay" && (
           <>
             <section>
-              <div className="console-header">
-                <div>
-                  <h2>Pre-approvals</h2>
-                  <p className="muted">Scoped autopay authorizations: amount limits, validity period, and remaining budget.</p>
-                </div>
+              <div className="section-header">
+                <h2>Pre-approvals</h2>
                 <div className="row">
                   <button disabled={isBusy || capabilitiesLoading} onClick={loadCapabilities}>Refresh</button>
                   <button disabled={isBusy} className="secondary" onClick={openCapCreate}>Create limit</button>
                 </div>
               </div>
+              <p className="muted">Scoped autopay authorizations: amount limits, validity period, and remaining budget.</p>
 
               {capabilities.length ? (
                 <div className="data-list">
@@ -1603,13 +1672,6 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
               )}
             </section>
           </>
-        )}
-
-        {activeView !== "keys" && activeView !== "autopay" && (
-          <section>
-            <h2>Output</h2>
-            <pre className="output">{busy ? `Working: ${busy}\n\n${output}` : output}</pre>
-          </section>
         )}
       </main>
     </div>

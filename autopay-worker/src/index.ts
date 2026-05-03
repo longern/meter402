@@ -24,6 +24,7 @@ type AutopayCapability = {
   network: Network;
   asset: Address;
   maxSingleAmount: string;
+  totalBudget: string;
   validBefore: string;
 };
 
@@ -154,6 +155,14 @@ export class AutopayAuthSession implements DurableObject {
         record.status = "denied";
         await this.ctx.storage.put("record", record);
         this.broadcastEvent(record);
+        // ─── Audit log: update denied ───
+        try {
+          await this.env.DB.prepare(
+            `UPDATE autopay_authorizations SET status = 'denied' WHERE request_id = ?`
+          ).bind(record.requestId).run();
+        } catch (err) {
+          console.error("Failed to update autopay_authorizations denied", err);
+        }
         return jsonResponse({ status: record.status });
       }
 
@@ -195,6 +204,43 @@ export class AutopayAuthSession implements DurableObject {
         await this.ctx.storage.put("record", record);
         this.broadcastEvent(record);
 
+        // ─── Audit log: update approved ───
+        let capabilityHash: string | null = null;
+        if (authorization.capability) {
+          capabilityHash = await hashCapability(authorization.capability);
+        }
+        try {
+          await this.env.DB.prepare(
+            `UPDATE autopay_authorizations SET status = 'approved', owner = ?, approved_at = ?, capability_hash = ? WHERE request_id = ?`
+          ).bind(record.owner, record.approvedAt, capabilityHash, record.requestId).run();
+        } catch (err) {
+          console.error("Failed to update autopay_authorizations approved", err);
+        }
+
+        // ─── Budget tracking: register capability budget ───
+        if (capabilityHash) {
+          try {
+            const now = new Date().toISOString();
+            await this.env.DB.prepare(
+              `INSERT INTO autopay_capability_budgets (capability_hash, owner, total_budget, max_single_amount, spent_amount, valid_before, created_at)
+               VALUES (?, ?, ?, ?, '0', ?, ?)
+               ON CONFLICT(capability_hash) DO UPDATE SET
+                 total_budget = excluded.total_budget,
+                 max_single_amount = excluded.max_single_amount,
+                 valid_before = excluded.valid_before`
+            ).bind(
+              capabilityHash,
+              authorization.owner,
+              authorization.capability!.totalBudget,
+              authorization.capability!.maxSingleAmount,
+              authorization.capability!.validBefore,
+              now
+            ).run();
+          } catch (err) {
+            console.error("Failed to upsert autopay_capability_budgets", err);
+          }
+        }
+
         return jsonResponse({
           status: record.status,
           owner: record.owner,
@@ -215,6 +261,14 @@ export class AutopayAuthSession implements DurableObject {
     const record = await this.ctx.storage.get<AuthRequestRecord>("record");
     if (record && record.status === "pending") {
       this.broadcastEvent(record, "expired");
+      // ─── Audit log: update expired ───
+      try {
+        await this.env.DB.prepare(
+          `UPDATE autopay_authorizations SET status = 'expired' WHERE request_id = ?`
+        ).bind(record.requestId).run();
+      } catch (err) {
+        console.error("Failed to update autopay_authorizations expired", err);
+      }
     }
     await this.ctx.storage.deleteAll();
   }
@@ -390,6 +444,29 @@ async function handleCreateAuthRequest(request: Request, env: Env): Promise<Resp
     body: JSON.stringify(record),
   });
 
+  // ─── Audit log: insert pending authorization ───
+  try {
+    await env.DB.prepare(
+      `INSERT INTO autopay_authorizations (id, request_id, kind, owner, worker_origin, policy_network, policy_asset, policy_max_single_amount, policy_valid_before, status, created_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      requestId,
+      requestId,
+      kind,
+      null,
+      publicOrigin,
+      policy?.network ?? null,
+      policy?.asset ?? null,
+      policy?.maxSingleAmount ?? null,
+      policy?.validBefore ?? null,
+      "pending",
+      now.toISOString(),
+      expiresAt.toISOString()
+    ).run();
+  } catch (err) {
+    console.error("Failed to insert autopay_authorizations", err);
+  }
+
   const verification = new URL("/authorize", publicOrigin);
   verification.searchParams.set("request_id", requestId);
   const websocket = new URL(`/api/auth/requests/${encodeURIComponent(requestId)}/events`, publicOrigin);
@@ -443,7 +520,73 @@ async function handlePay(request: Request, env: Env): Promise<Response> {
   const body = await readJsonObject(request);
   const paymentRequired = normalizePaymentRequired(body.paymentRequired ?? body.payment_required ?? body);
   const authorization = await verifyAuthorization(request, env, body);
-  const { headers, paymentPayload, selectedRequirement } = await createPayment(env, paymentRequired, authorization);
+
+  if (!authorization.capability) {
+    throw new HttpError(403, "missing_capability", "Payment authorization requires a capability.");
+  }
+
+  const capabilityHash = await hashCapability(authorization.capability);
+  const selectedRequirement = selectRequirement(paymentRequired, authorization.capability);
+
+  // ─── Budget check: atomic spent_amount + amount <= total_budget ───
+  const budgetRow = await env.DB.prepare(
+    `SELECT total_budget, spent_amount FROM autopay_capability_budgets WHERE capability_hash = ?`
+  ).bind(capabilityHash).first<{ total_budget: string; spent_amount: string }>();
+
+  if (!budgetRow) {
+    throw new HttpError(403, "capability_not_registered", "Capability budget is not registered.");
+  }
+
+  const newSpent = BigInt(budgetRow.spent_amount) + BigInt(selectedRequirement.amount);
+  const totalBudget = BigInt(budgetRow.total_budget);
+  if (newSpent > totalBudget) {
+    throw new HttpError(402, "budget_exceeded", "This payment would exceed the autopay capability total budget.");
+  }
+
+  const { headers, paymentPayload } = await createPayment(env, paymentRequired, authorization, selectedRequirement);
+
+  // ─── Atomic budget deduction ───
+  const updateResult = await env.DB.prepare(
+    `UPDATE autopay_capability_budgets SET spent_amount = ? WHERE capability_hash = ? AND spent_amount = ?`
+  ).bind(newSpent.toString(), capabilityHash, budgetRow.spent_amount).run();
+
+  if (updateResult.meta.changes === 0) {
+    throw new HttpError(409, "budget_race", "Capability budget was modified concurrently. Please retry.");
+  }
+
+  // ─── Audit log: insert payment ───
+  const paymentId = crypto.randomUUID();
+  const resourceUrl = paymentRequired.resource?.url ?? "";
+  const amountDecimal = (() => {
+    try {
+      const amt = BigInt(selectedRequirement.amount);
+      return (Number(amt) / 1_000_000).toFixed(6);
+    } catch {
+      return null;
+    }
+  })();
+  try {
+    await env.DB.prepare(
+      `INSERT INTO autopay_payments (id, authorization_id, capability_hash, owner, network, asset, pay_to, amount, amount_decimal, currency, resource_url, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      paymentId,
+      authorization.authRequestId ?? null,
+      capabilityHash,
+      authorization.owner,
+      selectedRequirement.network,
+      selectedRequirement.asset,
+      selectedRequirement.payTo,
+      selectedRequirement.amount,
+      amountDecimal,
+      "USD",
+      resourceUrl,
+      "created",
+      new Date().toISOString()
+    ).run();
+  } catch (err) {
+    console.error("Failed to insert autopay_payments", err);
+  }
 
   return jsonResponse({
     headers,
@@ -451,6 +594,7 @@ async function handlePay(request: Request, env: Env): Promise<Response> {
     selected_requirement: selectedRequirement,
     authorized_by: authorization.owner,
     auth_request_id: authorization.authRequestId,
+    capability_hash: capabilityHash,
   });
 }
 
@@ -492,10 +636,10 @@ async function createPayment(
   env: Env,
   paymentRequired: PaymentRequired,
   authorization: VerifiedAuthorization,
+  preselectedRequirement?: PaymentRequirements,
 ): Promise<{
   headers: Record<string, string>;
   paymentPayload: unknown;
-  selectedRequirement: PaymentRequirements;
 }> {
   if (authorization.paymentRequirementHash) {
     const actualHash = await hashJson(paymentRequired);
@@ -508,7 +652,7 @@ async function createPayment(
   }
 
   const payerWallet = getPayerWalletForOwner(env, authorization.owner);
-  const selectedRequirement = selectRequirement(paymentRequired, authorization.capability);
+  const selectedRequirement = preselectedRequirement ?? selectRequirement(paymentRequired, authorization.capability);
   const filteredPaymentRequired: PaymentRequired = {
     ...paymentRequired,
     accepts: [selectedRequirement],
@@ -533,7 +677,6 @@ async function createPayment(
   return {
     headers,
     paymentPayload,
-    selectedRequirement,
   };
 }
 
@@ -589,7 +732,7 @@ async function verifyAuthorization(
 
   const owner = getAddress(parsed.address);
   const allowedOwners = getAllowedOwners(env);
-  if (allowedOwners.length > 0 && !allowedOwners.map(normalizeAddress).includes(normalizeAddress(owner))) {
+  if (!allowedOwners.map(normalizeAddress).includes(normalizeAddress(owner))) {
     throw new HttpError(403, "owner_not_allowed", "SIWE signer is not allowed to authorize this worker.");
   }
 
@@ -656,8 +799,28 @@ function normalizeCapability(value: unknown, defaultValidBefore?: string): Autop
     network: requireString(input.network, "network") as Network,
     asset: getAddress(requireString(input.asset, "asset")),
     maxSingleAmount: requireUintString(input.maxSingleAmount, "maxSingleAmount"),
+    totalBudget: requireUintString(input.totalBudget, "totalBudget"),
     validBefore,
   };
+}
+
+/** Compute a canonical SHA-256 hash of an AutopayCapability. */
+async function hashCapability(capability: AutopayCapability): Promise<string> {
+  const canonical = JSON.stringify({
+    allowedOrigins: capability.allowedOrigins.slice().sort(),
+    allowedPayTo: capability.allowedPayTo.map(normalizeAddress).sort(),
+    network: capability.network,
+    asset: normalizeAddress(capability.asset),
+    maxSingleAmount: capability.maxSingleAmount,
+    totalBudget: capability.totalBudget,
+    validBefore: capability.validBefore,
+  });
+  const encoder = new TextEncoder();
+  const data = encoder.encode(canonical);
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 function inferPolicyFromPaymentRequirement(env: Env, paymentRequired: PaymentRequired | undefined, validBefore: string): AutopayCapability {
@@ -671,6 +834,7 @@ function inferPolicyFromPaymentRequirement(env: Env, paymentRequired: PaymentReq
     network: requirement.network as Network,
     asset: getAddress(requirement.asset),
     maxSingleAmount: requireUintString(requirement.amount, "amount"),
+    totalBudget: requireUintString(requirement.amount, "amount"),
     validBefore,
   };
 }
@@ -779,6 +943,7 @@ function sameCapability(a: AutopayCapability, b: AutopayCapability): boolean {
   return a.network === b.network
     && normalizeAddress(a.asset) === normalizeAddress(b.asset)
     && a.maxSingleAmount === b.maxSingleAmount
+    && a.totalBudget === b.totalBudget
     && a.validBefore === b.validBefore
     && sameStringSet(a.allowedOrigins, b.allowedOrigins)
     && sameStringSet(a.allowedPayTo.map(normalizeAddress), b.allowedPayTo.map(normalizeAddress));

@@ -959,6 +959,32 @@ button:disabled {
   font-size: 18px;
 }
 
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 48px;
+  margin: -20px -20px 16px;
+  padding: 0 20px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.section-header h2 {
+  margin-bottom: 0;
+  font-size: 18px;
+}
+
+.icon-button.plain {
+  background: transparent;
+  border-color: transparent;
+  color: #6b7280;
+}
+
+.icon-button.plain:hover {
+  background: #f3f4f6;
+  color: #111827;
+}
+
 .console-main section {
   background: #fff;
   border: 1px solid #e5e7eb;
@@ -1563,4 +1589,48 @@ textarea {
   .sidebar-scrim {
     text-align: initial;
   }
+}
+
+/* Deposit dialog payment area */
+.deposit-payment-area {
+  margin-top: 16px;
+  text-align: center;
+}
+
+.qr-desktop {
+  display: block;
+}
+
+.qr-mobile {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .qr-desktop {
+    display: none;
+  }
+  .qr-mobile {
+    display: block;
+  }
+}
+
+.qr-image {
+  width: 200px;
+  height: 200px;
+  margin: 0 auto;
+  display: block;
+  border-radius: 8px;
+}
+
+.wallet-deeplink {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 24px;
+  font-size: 16px;
+}
+
+.wallet-icon {
+  width: 20px;
+  height: 20px;
 }
