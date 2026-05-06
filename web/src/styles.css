@@ -1,4 +1,9 @@
+* {
+  box-sizing: border-box;
+}
+
 :root {
+  scrollbar-gutter: stable;
   color-scheme: light;
   font-family:
     Inter,
@@ -154,15 +159,29 @@ button {
 
 .button-link.primary,
 button.primary {
-  background: linear-gradient(90deg, #7C41F1, #3F73F5);
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  background: linear-gradient(90deg, #7c41f1, #3f73f5);
   color: #fff;
 }
 
-.button-link.primary:hover,
-button.primary:hover,
-.button-link.primary:focus-visible,
-button.primary:focus-visible {
+.button-link.primary::before,
+button.primary::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
   background: linear-gradient(90deg, #6d35e0, #3668e8);
+  opacity: 0;
+  transition: opacity 180ms ease-in-out;
+}
+
+.button-link.primary:hover::before,
+button.primary:hover::before,
+.button-link.primary:focus-visible::before,
+button.primary:focus-visible::before {
+  opacity: 1;
 }
 
 button {
@@ -170,8 +189,14 @@ button {
   color: #fff;
 }
 
-button:hover,
-button:focus-visible {
+button:not(.primary):not(.secondary):not(.text-button):not(.icon-button):not(
+    .modal-scrim
+  ):not(.sidebar-scrim):not(.login-qr-expired):not(.approval-copy-button):hover,
+button:not(.primary):not(.secondary):not(.text-button):not(.icon-button):not(
+    .modal-scrim
+  ):not(.sidebar-scrim):not(.login-qr-expired):not(
+    .approval-copy-button
+  ):focus-visible {
   background: #374151;
 }
 
@@ -501,8 +526,7 @@ button:disabled {
   box-sizing: border-box;
   display: grid;
   grid-template-columns: minmax(280px, 0.84fr) minmax(420px, 1fr);
-  grid-template-areas:
-    "heading step";
+  grid-template-areas: "heading step";
   grid-template-rows: 1fr;
   column-gap: 78px;
   align-items: stretch;
@@ -978,34 +1002,12 @@ button:disabled {
 
 .console-main h1 {
   margin-bottom: 8px;
-  font-size: 28px;
+  font-size: 24px;
   line-height: 1.2;
 }
 
 .console-main h2 {
-  margin-bottom: 16px;
-  font-size: 18px;
-}
-
-.section-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  min-height: 48px;
-  margin: -20px -20px 16px;
-  padding: 0 20px;
-  border-bottom: 1px solid #e5e7eb;
-}
-
-.section-header h2 {
-  margin-bottom: 0;
-  font-size: 18px;
-}
-
-.section-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  font-size: 16px;
 }
 
 .icon-button.plain {
@@ -1017,15 +1019,6 @@ button:disabled {
 .icon-button.plain:hover {
   background: #f3f4f6;
   color: #111827;
-}
-
-.console-main section,
-.console-main .card-section {
-  background: #fff;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  padding: 20px;
-  margin-top: 16px;
 }
 
 label {
@@ -1189,6 +1182,7 @@ textarea {
   border: 0;
   border-radius: 0;
   background: rgba(17, 24, 39, 0.38);
+  cursor: default;
 }
 
 .console-main .modal-panel {
@@ -1197,28 +1191,9 @@ textarea {
   width: min(520px, calc(100% - 32px));
   max-height: min(720px, calc(100dvh - 36px));
   overflow: auto;
-  padding: 20px;
+  margin-top: 0;
+  background: #fff;
   box-shadow: 0 24px 70px rgba(15, 23, 42, 0.22);
-}
-
-.modal-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  align-items: center;
-  min-height: 48px;
-  margin: -20px -20px 16px;
-  padding: 0 20px;
-  border-bottom: 1px solid #e5e7eb;
-}
-
-.modal-header h2 {
-  margin-bottom: 0;
-  font-size: 18px;
-}
-
-.modal-header .muted {
-  margin-bottom: 0;
 }
 
 .modal-close {
@@ -1311,12 +1286,13 @@ textarea {
 
 .deposit-list {
   display: grid;
-  margin-top: 8px;
+  margin-top: -12px;
+  margin-bottom: -12px;
 }
 
 .deposit-item {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 14px;
   padding: 12px 0;
@@ -1329,14 +1305,14 @@ textarea {
 
 .deposit-left {
   display: grid;
-  gap: 4px;
+  gap: 8px;
   flex: 1;
   min-width: 0;
 }
 
 .deposit-top {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 12px;
 }
 
@@ -1344,7 +1320,7 @@ textarea {
   width: 36px;
   height: 36px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #2775CA, #1a5fa8);
+  background: linear-gradient(135deg, #2775ca, #1a5fa8);
   color: #fff;
   font-weight: 800;
   font-size: 14px;
@@ -1450,7 +1426,6 @@ textarea {
 .deposit-right .icon-button.open-link:hover {
   color: #4b5563;
 }
-
 
 .usage-stats {
   display: grid;
@@ -1880,7 +1855,7 @@ textarea {
   background: #fff;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
   padding: 0 16px;
   margin-top: 8px;
 }
@@ -2000,7 +1975,9 @@ textarea {
   border-radius: 12px;
   background: #fff;
   border: 1px solid #e5e7eb;
-  transition: transform 0.15s, box-shadow 0.15s;
+  transition:
+    transform 0.15s,
+    box-shadow 0.15s;
   overflow: hidden;
 }
 
@@ -2019,4 +1996,3 @@ textarea {
   height: 28px;
   object-fit: contain;
 }
-

@@ -1,7 +1,24 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import CardSection from "../CardSection";
 import Modal from "../Modal";
-import { formatDateTime, shortAddress } from "../utils";
+import { formatDateTime } from "../utils";
+
+function CopyIcon({ copied }) {
+  if (copied) {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M5 13l4 4L19 7" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="9" y="9" width="10" height="10" rx="2" />
+      <path d="M6 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
+}
 
 export default function KeysView({
   apiKeys,
@@ -23,8 +40,55 @@ export default function KeysView({
   formatCompactNumber,
   formatMoneyCompact,
 }) {
+  const [baseUrlCopied, setBaseUrlCopied] = useState(false);
+  const baseUrlCopyTimerRef = useRef(null);
+  const openAiBaseUrl = typeof window === "undefined" ? "/v1" : `${window.location.origin}/v1`;
+
+  useEffect(() => {
+    return () => {
+      if (baseUrlCopyTimerRef.current) {
+        window.clearTimeout(baseUrlCopyTimerRef.current);
+      }
+    };
+  }, []);
+
+  async function copyOpenAiBaseUrl() {
+    try {
+      await navigator.clipboard.writeText(openAiBaseUrl);
+      setBaseUrlCopied(true);
+      if (baseUrlCopyTimerRef.current) {
+        window.clearTimeout(baseUrlCopyTimerRef.current);
+      }
+      baseUrlCopyTimerRef.current = window.setTimeout(() => {
+        setBaseUrlCopied(false);
+        baseUrlCopyTimerRef.current = null;
+      }, 1400);
+    } catch (error) {
+      console.error("Failed to copy OpenAI base URL", error);
+    }
+  }
+
   return (
     <>
+      <CardSection title="Base URL">
+        <p className="muted">Use this as the OpenAI SDK baseURL.</p>
+        <div className="approval-link-box">
+          <div className="approval-link-header">
+            <span>OpenAI base URL</span>
+            <button
+              className={`approval-copy-button${baseUrlCopied ? " copied" : ""}`}
+              type="button"
+              onClick={copyOpenAiBaseUrl}
+              aria-label={baseUrlCopied ? "Base URL copied" : "Copy base URL"}
+              title={baseUrlCopied ? "Copied" : "Copy base URL"}
+            >
+              <CopyIcon copied={baseUrlCopied} />
+            </button>
+          </div>
+          <code>{openAiBaseUrl}</code>
+        </div>
+      </CardSection>
+
       <CardSection
         title="API Keys"
         actions={

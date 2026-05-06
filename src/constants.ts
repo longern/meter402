@@ -11,3 +11,4 @@ export const CORS_HEADERS = {
 
 export const BASE_MAINNET = "eip155:8453";
 export const BASE_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+export const DEFAULT_X402_FACILITATOR_URL = "https://api.cdp.coinbase.com/platform/v2/x402";

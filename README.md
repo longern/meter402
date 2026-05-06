@@ -35,9 +35,9 @@ This version intentionally keeps Durable Objects out of the MVP. D1 is the sourc
 - `/login` — Owner-wallet login via an autopay endpoint.
 - `/pay-deposit` — Standalone deposit payment page for wallets that do not expose `window.ethereum` (mobile / non-ETH browsers). Deep-link or QR-code based.
 
-## Facilitator default
+## x402 defaults
 
-The default `wrangler.toml` uses Coinbase CDP's hosted x402 facilitator:
+When unset, the Worker defaults to Coinbase CDP's hosted x402 facilitator and Base mainnet:
 
 ```toml
 X402_FACILITATOR_URL = "https://api.cdp.coinbase.com/platform/v2/x402"
@@ -178,6 +178,7 @@ Do not enable development payments in production.
 ### Gateway
 
 - `POST /v1/*` — OpenAI-compatible endpoints. Proxied through Cloudflare AI Gateway. Usage is metered and invoiced.
+- `GET /v1/models` and `GET /v1/models/:id` — OpenAI-compatible model metadata endpoints. Proxied without creating usage invoices.
 - `GET /health` — Service health check.
 - `GET /api/config` — Public frontend configuration (min deposit, asset decimals, etc.).
 

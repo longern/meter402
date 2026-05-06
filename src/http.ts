@@ -22,6 +22,15 @@ export function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   });
 }
 
+export function corsPreflightResponse(request: Request): Response {
+  const headers = new Headers(CORS_HEADERS);
+  const requestedHeaders = request.headers.get("access-control-request-headers");
+  if (requestedHeaders) {
+    headers.set("access-control-allow-headers", requestedHeaders);
+  }
+  return new Response(null, { status: 204, headers });
+}
+
 export function errorResponse(status: number, code: string, message: string, extra: Record<string, unknown> = {}): Response {
   return jsonResponse({
     error: {
