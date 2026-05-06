@@ -10,6 +10,7 @@ export type Env = {
   X402_NETWORK?: string;
   X402_ASSET?: string;
   X402_RPC_URL?: string;
+  UPSTREAM_BASE_URL?: string;
   DEFAULT_MIN_DEPOSIT?: string;
   DEFAULT_CONCURRENCY_LIMIT?: string;
   DEFAULT_INPUT_MICRO_USD_PER_TOKEN?: string;
@@ -115,4 +116,20 @@ export type DepositAutopayState = {
 export type AutopayWalletBalanceEligibility = {
   account: Account;
   owner: string;
+};
+
+export type AutopayCapabilityRow = {
+  id: string;
+  account_id: string;
+  owner_address: string;
+  autopay_url: string;
+  siwe_message: string;
+  siwe_signature: string;
+  capability_json: string;
+  max_single_amount: number;
+  total_budget: number;
+  spent_amount: number;
+  valid_before: string;
+  created_at: string;
+  revoked_at: string | null;
 };

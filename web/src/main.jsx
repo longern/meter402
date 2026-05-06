@@ -1,9 +1,26 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import QRCode from "qrcode";
+import PayDepositPage from "./PayDepositPage";
+import RechargeView from "./views/RechargeView";
+import KeysView from "./views/KeysView";
+import UsageView from "./views/UsageView";
+import AutopayView from "./views/AutopayView";
+import {
+  readableError,
+  shortAddress,
+  formatCompactNumber,
+  formatMoneyCompact,
+  datetimeLocalToIso,
+  getConsoleView,
+  consoleViewSubtitle,
+  buildCoinbaseWalletLink,
+  buildOkxWalletLink,
+  readStoredAutopayEndpoint,
+  writeStoredAutopayEndpoint,
+} from "./utils";
 import "./styles.css";
 
-const API_KEY_STORAGE_KEY = "meteria402_console_api_key";
 const AUTOPAY_ENDPOINT_STORAGE_KEY = "meteria402_last_autopay_endpoint";
 const DEFAULT_AUTOPAY_URL = import.meta.env.VITE_DEFAULT_AUTOPAY_URL || "";
 const LOGIN_SUCCESS_REDIRECT_DELAY_MS = 500;
@@ -19,6 +36,7 @@ function App() {
   }, []);
 
   if (path === "/" || path === "") return <HomePage />;
+  if (path === "/pay-deposit") return <PayDepositPage />;
   if (path === "/login") return <LoginPage onSessionChange={setSession} />;
   if (path.startsWith("/console") && !sessionLoaded) {
     return null;
@@ -400,7 +418,7 @@ function LoginPage({ returnTo = "", onSessionChange = () => {} }) {
                 </label>
                 {error && <p className="login-error" role="alert">{error}</p>}
                 <div className="login-actions">
-                  <button disabled={busy || !autopayUrl.trim()} type="submit">
+                  <button className="primary" disabled={busy || !autopayUrl.trim()} type="submit">
                     {busy ? "Creating request..." : "Continue"}
                   </button>
                 </div>
@@ -508,8 +526,6 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeView, setActiveView] = useState(() => getConsoleView(window.location.pathname));
   const [autopayUrl, setAutopayUrl] = useState(initialIdentity?.autopay_url || DEFAULT_AUTOPAY_URL);
-  const [depositAmount, setDepositAmount] = useState("5.00");
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem(API_KEY_STORAGE_KEY) || "");
   const [newApiKey, setNewApiKey] = useState("");
   const [newKeyName, setNewKeyName] = useState("");
   const [newKeyExpiresAt, setNewKeyExpiresAt] = useState("");
@@ -517,14 +533,23 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
   const [keyDialogError, setKeyDialogError] = useState("");
   const [paymentDialog, setPaymentDialog] = useState(null);
   const [paymentPayload, setPaymentPayload] = useState("");
-  const [lastDepositPaymentId, setLastDepositPaymentId] = useState("");
-  const [lastDepositQuoteToken, setLastDepositQuoteToken] = useState("");
   const [autopayWalletBalance, setAutopayWalletBalance] = useState(null);
   const [autopayWalletBalanceError, setAutopayWalletBalanceError] = useState("");
+  const [capabilities, setCapabilities] = useState([]);
+  const [capabilitiesLoading, setCapabilitiesLoading] = useState(false);
+  const [capCreateOpen, setCapCreateOpen] = useState(false);
+  const [capTotalBudget, setCapTotalBudget] = useState("5.00");
+  const [capMaxSingleAmount, setCapMaxSingleAmount] = useState("5.00");
+  const [capTtlDays, setCapTtlDays] = useState(7);
+  const [capDialog, setCapDialog] = useState(null);
+  const [capApprovalCopied, setCapApprovalCopied] = useState(false);
+  const capAbortRef = useRef(null);
+  const [editEndpointOpen, setEditEndpointOpen] = useState(false);
+  const [depositDialogOpen, setDepositDialogOpen] = useState(false);
   const [account, setAccount] = useState(null);
   const [apiKeys, setApiKeys] = useState([]);
-  const [currentApiKeyId, setCurrentApiKeyId] = useState("");
   const [lastInvoices, setLastInvoices] = useState([]);
+  const [deposits, setDeposits] = useState([]);
   const [requests, setRequests] = useState([]);
   const [output, setOutput] = useState("");
   const [busy, setBusy] = useState("");
@@ -539,9 +564,9 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
   }, []);
 
   useEffect(() => {
-    document.body.classList.toggle("sidebar-locked", sidebarOpen || createKeyOpen || Boolean(paymentDialog));
+    document.body.classList.toggle("sidebar-locked", sidebarOpen || createKeyOpen || Boolean(paymentDialog) || editEndpointOpen || depositDialogOpen);
     return () => document.body.classList.remove("sidebar-locked");
-  }, [sidebarOpen, createKeyOpen, paymentDialog]);
+  }, [sidebarOpen, createKeyOpen, paymentDialog, editEndpointOpen, depositDialogOpen]);
 
   useEffect(() => {
     setIdentity(initialIdentity);
@@ -551,6 +576,14 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
   useEffect(() => {
     if (activeView === "recharge" && identity?.owner) {
       loadAutopayWalletBalance();
+      loadAccount();
+      loadDeposits();
+    }
+  }, [activeView, identity?.owner]);
+
+  useEffect(() => {
+    if (activeView === "autopay" && identity?.owner) {
+      loadCapabilities();
     }
   }, [activeView, identity?.owner]);
 
@@ -560,7 +593,6 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
 
   async function request(path, options = {}) {
     const headers = { "content-type": "application/json", ...(options.headers || {}) };
-    if (apiKey.trim()) headers.authorization = `Bearer ${apiKey.trim()}`;
     const response = await fetch(path, { ...options, headers });
     const text = await response.text();
     const json = text ? JSON.parse(text) : null;
@@ -577,89 +609,12 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
       if (label === "walletPayment") {
         setPaymentDialog((current) => current ? { ...current, status: "failed", error: readableError(error) } : current);
       }
+      if (label === "createCapability") {
+        setCapDialog((current) => current ? { ...current, status: "failed", error: readableError(error) } : current);
+      }
     } finally {
       setBusy("");
     }
-  }
-
-  async function quoteDeposit() {
-    await withBusy("quoteDeposit", async () => {
-      const json = await request("/api/deposits/quote", {
-        method: "POST",
-        body: JSON.stringify({ amount: depositAmount.trim() }),
-      });
-      setLastDepositPaymentId(json.payment_id);
-      setLastDepositQuoteToken(json.quote_token || "");
-      show(json);
-      await openDepositPayment(json.payment_id, json.quote_token || "");
-    });
-  }
-
-  async function settleDeposit() {
-    await withBusy("settleDeposit", async () => {
-      if (!lastDepositPaymentId || !lastDepositQuoteToken) throw new Error("Create a deposit quote first.");
-      const parsedPayload = paymentPayload.trim() ? JSON.parse(paymentPayload.trim()) : null;
-      const json = await request("/api/deposits/settle", {
-        method: "POST",
-        body: JSON.stringify({
-          payment_id: lastDepositPaymentId,
-          quote_token: lastDepositQuoteToken,
-          payment_payload: parsedPayload,
-          dev_proof: "dev-paid",
-          autopay_url: autopayUrl.trim() || undefined,
-        }),
-      });
-      if (json.api_key) saveApiKey(json.api_key);
-      show(json);
-    });
-  }
-
-  async function openDepositPayment(paymentId = lastDepositPaymentId, quoteToken = lastDepositQuoteToken) {
-    await withBusy("walletPayment", async () => {
-      if (!paymentId || !quoteToken) throw new Error("Create a deposit quote first.");
-      setPaymentDialog({
-        status: "preparing",
-        qr: "",
-        url: "",
-        error: "",
-      });
-      const started = await request(`/api/deposits/${encodeURIComponent(paymentId)}/autopay/start`, {
-        method: "POST",
-        body: JSON.stringify({
-          quote_token: quoteToken,
-          autopay_url: autopayUrl.trim(),
-        }),
-      });
-      const qr = started.verification_uri_complete
-        ? await QRCode.toDataURL(started.verification_uri_complete, {
-          margin: 1,
-          scale: 8,
-          color: {
-            dark: "#111827",
-            light: "#ffffff",
-          },
-        })
-        : "";
-      setPaymentDialog({
-        status: "waiting",
-        qr,
-        url: started.verification_uri_complete,
-        error: "",
-      });
-      show({
-        message: "Scan the QR with your wallet, then this page will wait for payment settlement.",
-        ...started,
-      });
-      const settled = await waitForAutopayAuthorization(
-        `/api/deposits/${encodeURIComponent(paymentId)}/autopay/complete`,
-        { autopay_state: started.autopay_state },
-        started.websocket_uri_complete,
-      );
-      if (settled?.settlement?.api_key) saveApiKey(settled.settlement.api_key);
-      if (settled?.status === "settled") {
-        setPaymentDialog((current) => current ? { ...current, status: "settled", error: "" } : current);
-      }
-    });
   }
 
   async function loadAutopayWalletBalance() {
@@ -677,11 +632,132 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
     }
   }
 
+  async function updateAutopayEndpoint() {
+    await withBusy("updateAutopay", async () => {
+      const json = await request("/api/session/autopay", {
+        method: "POST",
+        body: JSON.stringify({ autopay_url: autopayUrl.trim() }),
+      });
+      setIdentity((current) => current ? { ...current, autopay_url: json.autopay_url } : current);
+      setEditEndpointOpen(false);
+      show({ message: "Autopay endpoint updated.", autopay_url: json.autopay_url });
+    });
+  }
+
+  async function loadCapabilities() {
+    setCapabilitiesLoading(true);
+    try {
+      const json = await request("/api/autopay/capabilities");
+      setCapabilities(json.capabilities || []);
+    } catch (error) {
+      show(readableError(error));
+    } finally {
+      setCapabilitiesLoading(false);
+    }
+  }
+
+  async function createCapability(event) {
+    event.preventDefault();
+    setCapCreateOpen(false);
+    await withBusy("createCapability", async () => {
+      const controller = new AbortController();
+      capAbortRef.current = controller;
+      const signal = controller.signal;
+
+      const json = await request("/api/autopay/capabilities", {
+        method: "POST",
+        body: JSON.stringify({
+          total_budget: capTotalBudget.trim(),
+          max_single_amount: capMaxSingleAmount.trim(),
+          ttl_days: capTtlDays,
+          autopay_url: identity?.autopay_url || undefined,
+        }),
+        signal,
+      });
+
+      const qr = json.verification_uri_complete
+        ? await QRCode.toDataURL(json.verification_uri_complete, {
+            margin: 1,
+            scale: 8,
+            color: { dark: "#111827", light: "#ffffff" },
+          })
+        : "";
+
+      setCapDialog({
+        status: "waiting",
+        qr,
+        url: json.verification_uri_complete,
+        error: "",
+        capId: json.capability_id,
+      });
+
+      const result = await waitForAutopayAuthorization(
+        `/api/autopay/capabilities/${encodeURIComponent(json.capability_id)}/complete`,
+        {
+          poll_token: json.poll_token,
+          autopay_url: json.autopay_url,
+          total_budget: capTotalBudget.trim(),
+          max_single_amount: capMaxSingleAmount.trim(),
+        },
+        json.websocket_uri_complete,
+        signal,
+      );
+
+      if (result.status === "active" || result.status === "settled") {
+        setCapDialog((current) => (current ? { ...current, status: "done" } : current));
+      } else {
+        const errorText = typeof result.message === "string" ? result.message : `Authorization ${result.status || "failed"}.`;
+        setCapDialog((current) => (current ? { ...current, status: "failed", error: errorText } : current));
+      }
+      show(result);
+      await loadCapabilities();
+    });
+  }
+
+  async function revokeCapability(capId) {
+    if (!window.confirm("Revoke this autopay authorization? Future autopay requests will require fresh approval.")) return;
+    await withBusy("revokeCapability", async () => {
+      const json = await request(`/api/autopay/capabilities/${encodeURIComponent(capId)}`, { method: "DELETE" });
+      show(json);
+      await loadCapabilities();
+    });
+  }
+
+  function openCapCreate() {
+    setCapTotalBudget("5.00");
+    setCapMaxSingleAmount("5.00");
+    setCapTtlDays(7);
+    setCapCreateOpen(true);
+  }
+
+  function closeCapCreate() {
+    setCapCreateOpen(false);
+  }
+
+  function closeCapDialog() {
+    if (capAbortRef.current) {
+      capAbortRef.current.abort();
+      capAbortRef.current = null;
+    }
+    setCapDialog(null);
+    setCapApprovalCopied(false);
+  }
+
+  async function copyCapApprovalLink() {
+    if (!capDialog?.url) return;
+    try {
+      await navigator.clipboard.writeText(capDialog.url);
+      setCapApprovalCopied(true);
+      window.setTimeout(() => setCapApprovalCopied(false), 1400);
+    } catch {
+      setCapApprovalCopied(false);
+    }
+  }
+
   async function loadAccount() {
     await withBusy("loadAccount", async () => {
       const json = await request("/api/account");
       setAccount(json);
-      if (json.current_api_key_id) setCurrentApiKeyId(json.current_api_key_id);
       show(json);
     });
   }
@@ -690,7 +766,6 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
     await withBusy("loadApiKeys", async () => {
       const json = await request("/api/api-keys");
       setApiKeys(json.api_keys || []);
-      setCurrentApiKeyId(json.current_api_key_id || "");
       show(json);
     });
   }
@@ -708,6 +783,24 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
     setNewApiKey("");
     setNewKeyName("");
     setNewKeyExpiresAt("");
+  }
+
+  function openEditEndpointDialog() {
+    setAutopayUrl(identity?.autopay_url || "");
+    setEditEndpointOpen(true);
+  }
+
+  function closeEditEndpointDialog() {
+    setEditEndpointOpen(false);
+  }
+
+  function openDepositDialog() {
+    setDepositDialogOpen(true);
+  }
+
+  function closeDepositDialog() {
+    if (busy === "walletPayment" && paymentDialog?.status !== "settled" && paymentDialog?.status !== "failed") return;
+    setDepositDialogOpen(false);
   }
 
   function closePaymentDialog() {
@@ -728,14 +821,12 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
         }),
       });
       if (json.api_key) {
-        saveApiKey(json.api_key);
         setNewApiKey(json.api_key);
       }
       setNewKeyName("");
       setNewKeyExpiresAt("");
       const keysJson = await request("/api/api-keys");
       setApiKeys(keysJson.api_keys || []);
-      setCurrentApiKeyId(keysJson.current_api_key_id || "");
     } catch (error) {
       setKeyDialogError(readableError(error));
     } finally {
@@ -758,6 +849,14 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
     await withBusy("loadInvoices", async () => {
       const json = await request("/api/invoices");
       setLastInvoices(json.invoices || []);
+      show(json);
+    });
+  }
+
+  async function loadDeposits() {
+    await withBusy("loadDeposits", async () => {
+      const json = await request("/api/deposits");
+      setDeposits(json.deposits || []);
       show(json);
     });
   }
@@ -798,59 +897,128 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
     });
   }
 
-  async function waitForAutopayAuthorization(path, body, websocketUrl) {
-    if (!websocketUrl) {
-      return await pollAutopay(path, body);
+  async function waitForAutopayAuthorization(path, body, websocketUrl, signal) {
+    if (!websocketUrl || (signal && signal.aborted)) {
+      return await pollAutopay(path, body, signal);
     }
 
-    return await new Promise((resolve, reject) => {
-      const socket = new WebSocket(websocketUrl);
-      let settled = false;
+    let reconnectAttempts = 0;
+    const MAX_RECONNECT_ATTEMPTS = 3;
 
-      socket.onerror = () => {
-        if (!settled) reject(new Error("Authorization WebSocket failed."));
-      };
-      socket.onclose = () => {
-        if (!settled) reject(new Error("Authorization WebSocket closed before authorization completed."));
-      };
-      socket.onmessage = (event) => {
-        const message = parseSocketMessage(event.data);
-        if (message.status === "pending") {
-          show({ message: "Waiting for wallet signature...", event: message });
-          return;
+    async function tryWebSocket() {
+      return await new Promise((resolve, reject) => {
+        const socket = new WebSocket(websocketUrl);
+        let settled = false;
+
+        function onAbort() {
+          if (!settled) {
+            settled = true;
+            socket.close();
+            reject(new Error("Authorization cancelled."));
+          }
         }
-        if (message.status === "approved") {
-          settled = true;
-          socket.close();
-          request(path, {
-            method: "POST",
-            body: JSON.stringify(body),
-          }).then((json) => {
-            show(json);
-            resolve(json);
-          }, reject);
-          return;
-        }
-        if (message.status === "denied" || message.status === "expired") {
-          settled = true;
-          socket.close();
-          show(message);
-          resolve(message);
-        }
-      };
-    });
+        if (signal) signal.addEventListener("abort", onAbort);
+
+        socket.onerror = () => {
+          if (!settled) {
+            settled = true;
+            socket.close();
+            if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+              reconnectAttempts += 1;
+              show({ message: `WebSocket disconnected. Reconnecting (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...` });
+              tryWebSocket().then(resolve, reject);
+            } else {
+              show({ message: "WebSocket failed, falling back to polling..." });
+              pollAutopay(path, body, signal).then(resolve, reject);
+            }
+          }
+        };
+        socket.onclose = () => {
+          if (!settled) {
+            settled = true;
+            if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+              reconnectAttempts += 1;
+              show({ message: `WebSocket closed. Reconnecting (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...` });
+              tryWebSocket().then(resolve, reject);
+            } else {
+              show({ message: "WebSocket closed, falling back to polling..." });
+              pollAutopay(path, body, signal).then(resolve, reject);
+            }
+          }
+        };
+        socket.onmessage = (event) => {
+          const message = parseSocketMessage(event.data);
+          if (message.status === "pending") {
+            show({ message: "Waiting for wallet signature...", event: message });
+            return;
+          }
+          if (message.status === "approved") {
+            settled = true;
+            socket.close();
+            request(path, {
+              method: "POST",
+              body: JSON.stringify(body),
+              signal,
+            }).then((json) => {
+              show(json);
+              resolve(json);
+            }, reject);
+            return;
+          }
+          if (message.status === "denied" || message.status === "expired") {
+            settled = true;
+            socket.close();
+            show(message);
+            resolve(message);
+          }
+        };
+      });
+    }
+
+    return tryWebSocket();
   }
 
-  async function pollAutopay(path, body) {
-    for (;;) {
+  async function pollAutopay(path, body, signal) {
+    let lastError = "";
+    let consecutiveErrors = 0;
+    const MAX_POLL_ATTEMPTS = 150; // 5 minutes at 2s intervals
+    const MAX_CONSECUTIVE_ERRORS = 5;
+
+    for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt++) {
+      if (signal?.aborted) {
+        throw new Error("Authorization cancelled.");
+      }
       await new Promise((resolve) => setTimeout(resolve, 2000));
-      const json = await request(path, {
-        method: "POST",
-        body: JSON.stringify(body),
-      });
-      show(json);
-      if (json.status === "settled" || json.status === "settle_failed" || json.status === "denied") return json;
+      if (signal?.aborted) {
+        throw new Error("Authorization cancelled.");
+      }
+      try {
+        const json = await request(path, {
+          method: "POST",
+          body: JSON.stringify(body),
+          signal,
+        });
+        show(json);
+        consecutiveErrors = 0;
+        if (json.status === "settled" || json.status === "settle_failed" || json.status === "denied" || json.status === "active") {
+          return json;
+        }
+      } catch (error) {
+        if (signal?.aborted) {
+          throw new Error("Authorization cancelled.");
+        }
+        lastError = readableError(error);
+        consecutiveErrors += 1;
+        show({ message: "Polling error (" + consecutiveErrors + "/" + MAX_CONSECUTIVE_ERRORS + "): " + lastError });
+        if (capDialog) {
+          setCapDialog((current) => current ? { ...current, error: lastError } : current);
+        }
+        if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+          throw new Error("Polling failed " + MAX_CONSECUTIVE_ERRORS + " times in a row. Last error: " + lastError);
+        }
+      }
     }
+    throw new Error("Authorization polling timed out after 5 minutes.");
   }
 
   function openAuthorization(url) {
@@ -872,17 +1040,13 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
 
   const navItems = [
     { href: "/console/recharge", view: "recharge", label: "Recharge" },
+    { href: "/console/autopay", view: "autopay", label: "Autopay Limits" },
     { href: "/console/keys", view: "keys", label: "API Keys" },
     { href: "/console/usage", view: "usage", label: "Usage" },
   ];
 
   function closeSidebar() {
     setSidebarOpen(false);
-  }
-
-  function saveApiKey(value) {
-    setApiKey(value);
-    localStorage.setItem(API_KEY_STORAGE_KEY, value);
   }
 
   function navigateConsole(event, item) {
@@ -904,7 +1068,10 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
   return (
     <div className="console-shell">
       <aside className={`console-sidebar ${sidebarOpen ? "open" : ""}`}>
-        <a className="brand console-brand" href="/">Meteria402</a>
+        <a className="brand console-brand" href="/">
+          <img src="/logo-transparent.png" alt="" className="brand-icon" />
+          Meteria402
+        </a>
         <nav className="console-nav" aria-label="Console navigation">
           {navItems.map((item) => (
             <a
@@ -957,303 +1124,99 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
         <div className="console-header">
           <div>
             <h1>{activeItem.label}</h1>
-            <p>{consoleViewSubtitle(activeView)}</p>
           </div>
         </div>
 
         {activeView === "recharge" && (
-          <>
-            <section>
-              <h2>Payment Wallet</h2>
-              {identity?.owner ? (
-                <>
-                  <div className="balance-panel">
-                    <span>Address</span>
-                    <strong className="mono">
-                      {autopayWalletBalance?.address
-                        ? shortAddress(autopayWalletBalance.address)
-                        : autopayWalletBalanceError
-                        ? "Unavailable"
-                        : "Loading..."}
-                    </strong>
-                    <span>Balance</span>
-                    <strong>
-                      {autopayWalletBalanceError
-                        ? "Unavailable"
-                        : autopayWalletBalance
-                        ? `${autopayWalletBalance.balance} ${autopayWalletBalance.symbol}`
-                        : "Loading..."}
-                    </strong>
-                  </div>
-                  {autopayWalletBalanceError && <p className="form-error">{autopayWalletBalanceError}</p>}
-                  <div className="row">
-                    <button disabled={busy === "loadWalletBalance"} className="secondary" onClick={loadAutopayWalletBalance}>
-                      Refresh balance
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <p className="muted">No payer wallet is available for this login.</p>
-              )}
-            </section>
-
-	            <section>
-	              <h2>Create Deposit Quote</h2>
-	              <div className="grid">
-	                <label>
-	                  <span>Deposit amount</span>
-	                  <input value={depositAmount} inputMode="decimal" onChange={(event) => setDepositAmount(event.target.value)} />
-	                </label>
-	                <label>
-	                  <span>Autopay endpoint</span>
-	                  <input value={autopayUrl} autoComplete="url" onChange={(event) => setAutopayUrl(event.target.value)} />
-	                </label>
-	              </div>
-              <div className="row">
-                <button disabled={isBusy} onClick={quoteDeposit}>Create quote</button>
-                <button disabled={isBusy} className="secondary" onClick={settleDeposit}>Settle with dev proof</button>
-                <button disabled={isBusy} className="secondary" onClick={() => openDepositPayment()}>Pay with wallet</button>
-              </div>
-              <p className="muted">Development settlement requires ALLOW_DEV_PAYMENTS=true and sends dev_proof=dev-paid.</p>
-            </section>
-
-            <section>
-              <h2>Payment Payload</h2>
-              <textarea
-                value={paymentPayload}
-                placeholder="Paste a signed x402 payment payload here for facilitator settlement."
-                onChange={(event) => setPaymentPayload(event.target.value)}
-              />
-            </section>
-          </>
+          <RechargeView
+            account={account}
+            deposits={deposits}
+            identity={identity}
+            autopayWalletBalance={autopayWalletBalance}
+            autopayWalletBalanceError={autopayWalletBalanceError}
+            isBusy={isBusy}
+            busy={busy}
+            loadAccount={loadAccount}
+            loadDeposits={loadDeposits}
+            loadAutopayWalletBalance={loadAutopayWalletBalance}
+            openDepositDialog={openDepositDialog}
+            closeDepositDialog={closeDepositDialog}
+            editEndpointOpen={editEndpointOpen}
+            closeEditEndpointDialog={closeEditEndpointDialog}
+            openEditEndpointDialog={openEditEndpointDialog}
+            autopayUrl={autopayUrl}
+            setAutopayUrl={setAutopayUrl}
+            updateAutopayEndpoint={updateAutopayEndpoint}
+            depositDialogOpen={depositDialogOpen}
+            paymentDialog={paymentDialog}
+            closePaymentDialog={closePaymentDialog}
+            request={request}
+            withBusy={withBusy}
+            show={show}
+            setNewApiKey={setNewApiKey}
+            waitForAutopayAuthorization={waitForAutopayAuthorization}
+          />
         )}
 
         {activeView === "keys" && (
-          <>
-            <section>
-              <h2>API Keys</h2>
-              <p className="muted">Keys are generated by the Worker and shown once. The active key is stored locally for this console.</p>
-              {apiKey ? (
-                <>
-                  <div className="key-status">
-                    <span>Active key: {maskApiKey(apiKey)}</span>
-                  </div>
-                  <div className="row">
-                    <button disabled={isBusy} onClick={loadApiKeys}>Refresh keys</button>
-                    <button disabled={isBusy} className="secondary" onClick={openCreateKeyDialog}>Create key</button>
-                  </div>
-                </>
-              ) : (
-                <div className="empty-state">
-                  <strong>No active key</strong>
-                  <p>Create a deposit first. The Worker will generate the first API key after settlement.</p>
-                  <button type="button" onClick={() => navigateConsoleView("recharge")}>Go to Recharge</button>
-                </div>
-              )}
-            </section>
-
-            <section>
-              <h2>Keys</h2>
-              {apiKeys.length ? (
-                <div className="data-list">
-                  {apiKeys.map((item) => (
-                    <div className="data-row" key={item.id}>
-                      <div>
-                        <strong>{item.name || `${item.prefix}_...${item.key_suffix}`}</strong>
-                        <span>
-                          {item.prefix}_...{item.key_suffix} · {item.status}{item.id === currentApiKeyId ? " · current" : ""}
-                          {item.expires_at ? ` · expires ${formatDateTime(item.expires_at)}` : ""}
-                        </span>
-                      </div>
-                      <button
-                        className="secondary danger"
-                        disabled={isBusy || item.status !== "active" || item.id === currentApiKeyId}
-                        onClick={() => revokeApiKey(item.id)}
-                      >
-                        Revoke
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="muted">{apiKey ? "Refresh the list to load keys." : "Create a deposit first to receive the initial key."}</p>
-              )}
-            </section>
-          </>
-        )}
-
-        {createKeyOpen && (
-          <div className="modal-layer" role="presentation">
-            <button className="modal-scrim" type="button" aria-label="Close create key dialog" onClick={closeCreateKeyDialog} />
-            <section className="modal-panel" role="dialog" aria-modal="true" aria-labelledby="create-key-title">
-              <div className="modal-header">
-                <div>
-                  <h2 id="create-key-title">Create API Key</h2>
-                  <p className="muted">The generated key is shown once.</p>
-                </div>
-                <button className="icon-button modal-close" type="button" aria-label="Close" onClick={closeCreateKeyDialog}>
-                  <svg className="close-icon" viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M7 7l10 10M17 7L7 17" />
-                  </svg>
-                </button>
-              </div>
-              <form onSubmit={createManagedApiKey}>
-                <div className="grid single">
-                  <label>
-                    <span>Name</span>
-                    <input value={newKeyName} placeholder="Auto-generated if empty" onChange={(event) => setNewKeyName(event.target.value)} />
-                  </label>
-                  <label>
-                    <span>Expires</span>
-                    <input type="datetime-local" value={newKeyExpiresAt} onChange={(event) => setNewKeyExpiresAt(event.target.value)} />
-                  </label>
-                </div>
-                {keyDialogError && <p className="form-error">{keyDialogError}</p>}
-                {newApiKey && (
-                  <div className="generated-key">
-                    <span>New key</span>
-                    <code>{newApiKey}</code>
-                  </div>
-                )}
-                <div className="modal-actions">
-                  <button type="button" className="secondary" onClick={closeCreateKeyDialog}>Close</button>
-                  <button type="submit" disabled={busy === "createApiKey" || !apiKey.trim()}>
-                    {busy === "createApiKey" ? "Creating..." : "Create key"}
-                  </button>
-                </div>
-              </form>
-            </section>
-          </div>
-        )}
-
-        {paymentDialog && (
-          <div className="modal-layer" role="presentation">
-            <button className="modal-scrim" type="button" aria-label="Close payment dialog" onClick={closePaymentDialog} />
-            <section className="modal-panel payment-modal" role="dialog" aria-modal="true" aria-labelledby="payment-title">
-              <div className="modal-header">
-                <div>
-                  <h2 id="payment-title">Pay Deposit</h2>
-                  <p className="muted">Scan with your wallet app or open the link on this device.</p>
-                </div>
-                <button className="icon-button modal-close" type="button" aria-label="Close" onClick={closePaymentDialog}>
-                  <svg className="close-icon" viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M7 7l10 10M17 7L7 17" />
-                  </svg>
-                </button>
-              </div>
-
-              <div className="payment-qr-panel">
-                {paymentDialog.qr ? (
-                  <img src={paymentDialog.qr} alt="Wallet payment QR code" />
-                ) : (
-                  <div className="payment-qr-placeholder">Preparing QR</div>
-                )}
-                <div>
-                  <strong>
-                    {paymentDialog.status === "settled"
-                      ? "Payment settled"
-                      : paymentDialog.status === "failed"
-                      ? "Payment failed"
-                      : "Waiting for wallet signature"}
-                  </strong>
-                  <p className="muted">
-                    {paymentDialog.status === "settled"
-                      ? "Your API key has been stored locally."
-                      : "After approval, this page will settle the payment and store the generated API key."}
-                  </p>
-                  {paymentDialog.error && <p className="form-error">{paymentDialog.error}</p>}
-                  <div className="row">
-                    {paymentDialog.url && (
-                      <a className="button-link secondary" href={paymentDialog.url} target="_blank" rel="noreferrer">
-                        Open link
-                      </a>
-                    )}
-                    {(paymentDialog.status === "settled" || paymentDialog.status === "failed") && (
-                      <button type="button" onClick={closePaymentDialog}>Close</button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </section>
-          </div>
+          <KeysView
+            apiKeys={apiKeys}
+            isBusy={isBusy}
+            busy={busy}
+            loadApiKeys={loadApiKeys}
+            openCreateKeyDialog={openCreateKeyDialog}
+            revokeApiKey={revokeApiKey}
+            navigateConsoleView={navigateConsoleView}
+            createKeyOpen={createKeyOpen}
+            closeCreateKeyDialog={closeCreateKeyDialog}
+            createManagedApiKey={createManagedApiKey}
+            newKeyName={newKeyName}
+            setNewKeyName={setNewKeyName}
+            newKeyExpiresAt={newKeyExpiresAt}
+            setNewKeyExpiresAt={setNewKeyExpiresAt}
+            newApiKey={newApiKey}
+            keyDialogError={keyDialogError}
+            formatCompactNumber={formatCompactNumber}
+            formatMoneyCompact={formatMoneyCompact}
+          />
         )}
 
         {activeView === "usage" && (
-          <>
-            <section>
-              <h2>Account</h2>
-              {apiKey ? (
-                <>
-                  <div className="key-status">
-                    <span>Active key: {maskApiKey(apiKey)}</span>
-                  </div>
-                  <div className="row">
-                    <button disabled={isBusy} onClick={loadAccount}>Load account</button>
-                    <button disabled={isBusy} className="secondary" onClick={loadRequests}>Load calls</button>
-                    <button disabled={isBusy} className="secondary" onClick={loadInvoices}>Load invoices</button>
-                    <button disabled={isBusy} className="secondary" onClick={autopayInvoice}>Pay invoice</button>
-                  </div>
-                </>
-              ) : (
-                <div className="empty-state">
-                  <strong>No active key</strong>
-                  <p>Create a deposit first. Usage records are tied to the generated API key.</p>
-                  <button type="button" onClick={() => navigateConsoleView("recharge")}>Go to Recharge</button>
-                </div>
-              )}
-              {account && (
-                <dl className="summary-grid">
-                  <dt>Balance</dt><dd>{account.deposit_balance}</dd>
-                  <dt>Unpaid</dt><dd>{account.unpaid_invoice_total}</dd>
-                  <dt>Status</dt><dd>{account.status}</dd>
-                </dl>
-              )}
-            </section>
-
-            <section>
-              <h2>Model Calls</h2>
-              {requests.length ? (
-                <div className="data-list">
-                  {requests.map((item) => (
-                    <div className="data-row" key={item.id}>
-                      <div>
-                        <strong>{item.model || "Unknown model"}</strong>
-                        <span>{item.status} · {item.total_tokens ?? 0} tokens · {item.final_cost || "0.000000"}</span>
-                      </div>
-                      <span className="mono">{shortId(item.id)}</span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="muted">Load calls to see recent metered gateway requests.</p>
-              )}
-            </section>
-
-            <section>
-              <h2>Invoices</h2>
-              {lastInvoices.length ? (
-                <div className="data-list">
-                  {lastInvoices.map((item) => (
-                    <div className="data-row" key={item.id}>
-                      <div>
-                        <strong>{item.amount_due} {item.currency}</strong>
-                        <span>{item.status} · {shortId(item.id)}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="muted">Load invoices to see unpaid usage charges.</p>
-              )}
-            </section>
-          </>
+          <UsageView
+            account={account}
+            requests={requests}
+            lastInvoices={lastInvoices}
+            isBusy={isBusy}
+            loadAccount={loadAccount}
+            loadRequests={loadRequests}
+            loadInvoices={loadInvoices}
+            autopayInvoice={autopayInvoice}
+          />
         )}
 
-        {activeView !== "keys" && (
-          <section>
-            <h2>Output</h2>
-            <pre className="output">{busy ? `Working: ${busy}\n\n${output}` : output}</pre>
-          </section>
+        {activeView === "autopay" && (
+          <AutopayView
+            capabilities={capabilities}
+            capabilitiesLoading={capabilitiesLoading}
+            isBusy={isBusy}
+            busy={busy}
+            loadCapabilities={loadCapabilities}
+            openCapCreate={openCapCreate}
+            revokeCapability={revokeCapability}
+            capCreateOpen={capCreateOpen}
+            closeCapCreate={closeCapCreate}
+            createCapability={createCapability}
+            capDialog={capDialog}
+            closeCapDialog={closeCapDialog}
+            capTotalBudget={capTotalBudget}
+            setCapTotalBudget={setCapTotalBudget}
+            capMaxSingleAmount={capMaxSingleAmount}
+            setCapMaxSingleAmount={setCapMaxSingleAmount}
+            capTtlDays={capTtlDays}
+            setCapTtlDays={setCapTtlDays}
+            capApprovalCopied={capApprovalCopied}
+            copyCapApprovalLink={copyCapApprovalLink}
+          />
         )}
       </main>
     </div>
@@ -1277,92 +1240,6 @@ function parseSocketMessage(data) {
     throw new Error("Unexpected WebSocket message.");
   }
   return JSON.parse(data);
-}
-
-function readableError(error) {
-  if (error instanceof Error && error.message) return error.message;
-  if (error?.error?.message) return error.error.message;
-  if (error?.message) return error.message;
-  if (typeof error === "string") return error;
-  try {
-    const json = JSON.stringify(error, null, 2);
-    return json && json !== "{}" ? json : "Request failed.";
-  } catch {
-    return "Request failed.";
-  }
-}
-
-function readStoredAutopayEndpoint() {
-  try {
-    return localStorage.getItem(AUTOPAY_ENDPOINT_STORAGE_KEY) || "";
-  } catch {
-    return "";
-  }
-}
-
-function writeStoredAutopayEndpoint(value) {
-  try {
-    localStorage.setItem(AUTOPAY_ENDPOINT_STORAGE_KEY, value);
-  } catch {
-    // Login still works if the browser blocks localStorage.
-  }
-}
-
-function buildCoinbaseWalletLink(url) {
-  return `https://go.cb-w.com/dapp?cb_url=${encodeURIComponent(url)}`;
-}
-
-function buildOkxWalletLink(url) {
-  const deepLink = `okx://wallet/dapp/url?dappUrl=${encodeURIComponent(url)}`;
-  return `https://web3.okx.com/download?deeplink=${encodeURIComponent(deepLink)}`;
-}
-
-function getConsoleView(pathname) {
-  if (pathname === "/console/keys") return "keys";
-  if (pathname === "/console/usage") return "usage";
-  return "recharge";
-}
-
-function consoleViewSubtitle(view) {
-  if (view === "keys") return "Create and revoke keys used by clients calling the metered AI gateway.";
-  if (view === "usage") return "Inspect account balance, model call records, and payable invoices.";
-  return "Create a refundable deposit and receive an API key for metered model calls.";
-}
-
-function shortAddress(value) {
-  if (!value || value.length <= 14) return value || "";
-  return `${value.slice(0, 6)}...${value.slice(-4)}`;
-}
-
-function shortId(value) {
-  if (!value || value.length <= 16) return value || "";
-  return `${value.slice(0, 8)}...${value.slice(-4)}`;
-}
-
-function maskApiKey(value) {
-  if (!value) return "";
-  if (value.length <= 18) return value;
-  return `${value.slice(0, 10)}...${value.slice(-4)}`;
-}
-
-function datetimeLocalToIso(value) {
-  if (!value) return undefined;
-  const date = new Date(value);
-  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
-}
-
-function formatDateTime(value) {
-  try {
-    return new Intl.DateTimeFormat(undefined, {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    }).format(new Date(value));
-  } catch {
-    return value;
-  }
 }
 
 createRoot(document.getElementById("root")).render(<App />);

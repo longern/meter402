@@ -28,6 +28,13 @@ This implementation includes:
 
 This version intentionally keeps Durable Objects out of the MVP. D1 is the source of truth, with conditional updates used for request gating.
 
+## Pages
+
+- `/` — Home page with gateway overview.
+- `/console` — Account dashboard for deposits, API keys, usage, invoices, and autopay.
+- `/login` — Owner-wallet login via an autopay endpoint.
+- `/pay-deposit` — Standalone deposit payment page for wallets that do not expose `window.ethereum` (mobile / non-ETH browsers). Deep-link or QR-code based.
+
 ## Facilitator default
 
 The default `wrangler.toml` uses Coinbase CDP's hosted x402 facilitator:
@@ -46,9 +53,14 @@ Set your recipient wallet before using real payments:
 wrangler secret put X402_RECIPIENT_ADDRESS
 ```
 
-If your facilitator requires authentication, set:
+If your facilitator requires authentication, set one of:
 
 ```bash
+# For CDP JWT authentication (preferred)
+wrangler secret put CDP_API_KEY_ID
+wrangler secret put CDP_API_KEY_SECRET
+
+# Or for legacy token auth
 wrangler secret put X402_FACILITATOR_AUTH_TOKEN
 ```
 
@@ -125,30 +137,49 @@ Do not enable development payments in production.
 
 ## API
 
-Create a deposit quote:
+### Authentication
 
-```http
-POST /api/deposits/quote
-Content-Type: application/json
+- `GET /api/session` — Returns the current session identity (owner address, autopay URL, expiry) or `null`.
+- `POST /api/login/autopay/start` — Initiates an owner-wallet login via an autopay endpoint.
+- `POST /api/login/autopay/complete` — Completes a login after wallet approval.
+- `POST /api/logout` — Clears the session cookie.
+- `POST /api/session/autopay` — Updates the autopay endpoint stored in the session.
 
-{ "amount": "5.00" }
-```
+### Deposits
 
-The response includes a signed `quote_token`; the Worker does not write the quote
-to D1 until settlement succeeds.
+- `POST /api/deposits/quote` — Create a refundable deposit quote.
+- `POST /api/deposits/settle` — Settle a deposit via x402 (browser wallet, mobile deep-link, or dev bypass).
+- `GET /api/deposits` — List your deposit history.
 
-Settle a deposit:
+### Account
 
-```http
-POST /api/deposits/settle
-Content-Type: application/json
+- `GET /api/account` — Get deposit balance, unpaid invoice total, and status.
+- `GET /api/api-keys` — List API keys.
+- `POST /api/api-keys` — Create a new API key.
+- `DELETE /api/api-keys/:id` — Revoke an API key.
+- `GET /api/invoices` — List invoices.
+- `GET /api/requests` — List model calls / usage records.
 
-{
-  "payment_id": "pay_xxx",
-  "quote_token": "eyJ...",
-  "payment_payload": {}
-}
-```
+### Invoice Payment
+
+- `POST /api/invoices/:id/pay/quote` — Create a payment quote for an unpaid invoice.
+- `POST /api/invoices/:id/pay/settle` — Settle an invoice payment.
+- `POST /api/invoices/:id/pay/autopay/start` — Start autopay invoice settlement.
+- `POST /api/invoices/:id/pay/autopay/complete` — Complete autopay invoice settlement.
+
+### Autopay
+
+- `GET /api/autopay/capabilities` — List scoped autopay authorizations (limits, remaining budget, expiry).
+- `POST /api/autopay/capabilities` — Create a new scoped autopay limit.
+- `DELETE /api/autopay/capabilities/:id` — Revoke an autopay authorization.
+- `POST /api/autopay/capabilities/:id/complete` — Complete the approval after wallet signature.
+- `GET /api/autopay-wallet/balance` — Query the autopay wallet address and USDC balance.
+
+### Gateway
+
+- `POST /v1/*` — OpenAI-compatible endpoints. Proxied through Cloudflare AI Gateway. Usage is metered and invoiced.
+- `GET /health` — Service health check.
+- `GET /api/config` — Public frontend configuration (min deposit, asset decimals, etc.).
 
 Use the generated API key with any OpenAI-compatible client:
 

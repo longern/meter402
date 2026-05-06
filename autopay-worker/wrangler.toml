@@ -10,9 +10,16 @@ routes = [
 ]
 
 [vars]
-# Optional comma-separated owner wallet address allowlist.
-# If empty or omitted, any valid SIWE signer can authorize this worker.
-AUTOPAY_ALLOWED_OWNERS = ""
+AUTOPAY_ALLOWED_OWNERS = "0x9bb3c3042df4fc0cfa441e0e9f7dc7aa25ea7ef1"
+
+# D1 database ID needs to be set after creating the database via:
+#   npx wrangler d1 create meteria402_autopay_audit
+# Then copy the database_id here.
+[[d1_databases]]
+binding = "DB"
+database_name = "meteria402_autopay_audit"
+database_id = "01e6a8bc-fe69-4a48-80d6-d9032c37f751"
+migrations_dir = "migrations"
 
 [[durable_objects.bindings]]
 name = "AUTOPAY_AUTH_SESSIONS"
@@ -27,6 +34,3 @@ directory = "./dist/client"
 html_handling = "auto-trailing-slash"
 not_found_handling = "none"
 run_worker_first = ["/authorize", "/api/*"]
-
-# Set secrets with wrangler:
-# wrangler secret put AUTOPAY_PRIVATE_KEY

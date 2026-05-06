@@ -77,6 +77,16 @@ p {
 .brand {
   font-weight: 800;
   font-size: 18px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.brand-icon {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  display: block;
 }
 
 .nav-actions {
@@ -143,9 +153,26 @@ button {
 }
 
 .button-link.primary,
+button.primary {
+  background: linear-gradient(90deg, #7C41F1, #3F73F5);
+  color: #fff;
+}
+
+.button-link.primary:hover,
+button.primary:hover,
+.button-link.primary:focus-visible,
+button.primary:focus-visible {
+  background: linear-gradient(90deg, #6d35e0, #3668e8);
+}
+
 button {
   background: #111827;
   color: #fff;
+}
+
+button:hover,
+button:focus-visible {
+  background: #374151;
 }
 
 .button-link.secondary,
@@ -453,6 +480,7 @@ button:disabled {
 .compact-nav {
   width: min(1120px, 100%);
   margin: 0 auto 18px;
+  padding: 16px 16px 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -959,7 +987,40 @@ button:disabled {
   font-size: 18px;
 }
 
-.console-main section {
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 48px;
+  margin: -20px -20px 16px;
+  padding: 0 20px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.section-header h2 {
+  margin-bottom: 0;
+  font-size: 18px;
+}
+
+.section-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.icon-button.plain {
+  background: transparent;
+  border-color: transparent;
+  color: #6b7280;
+}
+
+.icon-button.plain:hover {
+  background: #f3f4f6;
+  color: #111827;
+}
+
+.console-main section,
+.console-main .card-section {
   background: #fff;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
@@ -1025,10 +1086,7 @@ textarea {
 
 .key-status {
   margin-top: 12px;
-  padding: 12px;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  background: #f8fafc;
+  padding: 8px 0;
 }
 
 .key-status span {
@@ -1045,10 +1103,7 @@ textarea {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
   gap: 8px 14px;
-  padding: 14px;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  background: #f8fafc;
+  padding: 4px 0;
 }
 
 .balance-panel span {
@@ -1103,10 +1158,7 @@ textarea {
 
 .empty-state {
   margin-top: 14px;
-  padding: 16px;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  background: #f8fafc;
+  padding: 8px 0;
 }
 
 .empty-state strong {
@@ -1142,10 +1194,9 @@ textarea {
 .console-main .modal-panel {
   position: relative;
   z-index: 1;
-  width: min(520px, 100%);
+  width: min(520px, calc(100% - 32px));
   max-height: min(720px, calc(100dvh - 36px));
   overflow: auto;
-  margin: 0;
   padding: 20px;
   box-shadow: 0 24px 70px rgba(15, 23, 42, 0.22);
 }
@@ -1154,15 +1205,26 @@ textarea {
   display: flex;
   justify-content: space-between;
   gap: 16px;
-  align-items: flex-start;
+  align-items: center;
+  min-height: 48px;
+  margin: -20px -20px 16px;
+  padding: 0 20px;
+  border-bottom: 1px solid #e5e7eb;
 }
 
 .modal-header h2 {
-  margin-bottom: 6px;
+  margin-bottom: 0;
+  font-size: 18px;
+}
+
+.modal-header .muted {
+  margin-bottom: 0;
 }
 
 .modal-close {
   flex-shrink: 0;
+  border: none;
+  background: transparent;
 }
 
 .modal-actions {
@@ -1215,15 +1277,21 @@ textarea {
   gap: 10px;
 }
 
+.data-list {
+  margin-top: 8px;
+}
+
 .data-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  padding: 12px;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  background: #f8fafc;
+  padding: 10px 0;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.data-row:last-child {
+  border-bottom: 0;
 }
 
 .data-row strong {
@@ -1239,6 +1307,183 @@ textarea {
 
 .data-row button {
   flex-shrink: 0;
+}
+
+.deposit-list {
+  display: grid;
+  margin-top: 8px;
+}
+
+.deposit-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 0;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.deposit-item:last-child {
+  border-bottom: none;
+}
+
+.deposit-left {
+  display: grid;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.deposit-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.deposit-coin-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #2775CA, #1a5fa8);
+  color: #fff;
+  font-weight: 800;
+  font-size: 14px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.deposit-main {
+  display: grid;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.deposit-amount {
+  font-size: 15px;
+  font-weight: 700;
+  color: #111827;
+}
+
+.deposit-status {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: capitalize;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.deposit-status::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.deposit-status.settled::before {
+  background: #10b981;
+}
+.deposit-status.settled {
+  color: #059669;
+}
+
+.deposit-status.pending::before {
+  background: #f59e0b;
+}
+.deposit-status.pending {
+  color: #d97706;
+}
+
+.deposit-status.failed::before {
+  background: #ef4444;
+}
+.deposit-status.failed {
+  color: #dc2626;
+}
+
+.deposit-bottom {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.deposit-network {
+  background: #f3f4f6;
+  color: #374151;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.deposit-address {
+  font-family: ui-monospace, monospace;
+  overflow-wrap: break-word;
+  word-break: break-all;
+}
+
+.deposit-right {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.deposit-time {
+  font-size: 12px;
+  color: #6b7280;
+  flex-shrink: 0;
+  align-self: center;
+}
+
+.deposit-right .icon-button.open-link {
+  border: none;
+  background: transparent;
+  color: #9ca3af;
+  padding: 4px;
+}
+
+.deposit-right .icon-button.open-link:hover {
+  color: #4b5563;
+}
+
+
+.usage-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.stat-box {
+  text-align: center;
+  padding: 8px 6px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+}
+
+.stat-box .num {
+  font-size: 16px;
+  font-weight: 700;
+  color: #111827;
+}
+
+.stat-box .label {
+  font-size: 11px;
+  color: #64748b;
+  margin-top: 2px;
+  font-weight: 600;
+}
+
+@media (max-width: 720px) {
+  .usage-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .summary-grid {
@@ -1361,6 +1606,11 @@ textarea {
   .sidebar-scrim.visible {
     opacity: 1;
     pointer-events: auto;
+  }
+
+  .sidebar-scrim:hover,
+  .sidebar-scrim:focus-visible {
+    background: rgba(17, 24, 39, 0.32);
   }
 
   .console-main {
@@ -1530,3 +1780,243 @@ textarea {
     text-align: initial;
   }
 }
+
+.input-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: stretch;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #fff;
+  overflow: hidden;
+  height: 40px;
+}
+
+.input-row input {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 0 12px;
+  margin: 0;
+}
+
+.input-suffix {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #6b7280;
+  background: #f8fafc;
+  border-left: 1px solid #e5e7eb;
+  white-space: nowrap;
+  margin: 0;
+}
+
+/* Deposit dialog payment area */
+.deposit-payment-area {
+  margin-top: 16px;
+  text-align: center;
+}
+
+.qr-desktop {
+  display: block;
+}
+
+.qr-mobile {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .qr-desktop {
+    display: none;
+  }
+  .qr-mobile {
+    display: block;
+  }
+}
+
+.qr-image {
+  width: 200px;
+  height: 200px;
+  margin: 0 auto;
+  display: block;
+  border-radius: 8px;
+}
+
+.wallet-deeplink {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 24px;
+  font-size: 16px;
+}
+
+.wallet-icon {
+  width: 20px;
+  height: 20px;
+}
+
+/* Pay Deposit Page */
+.pay-deposit-page {
+  min-height: 100vh;
+  background: #f7f8fa;
+}
+
+.pay-deposit-main {
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 24px 16px 48px;
+}
+
+.pay-deposit-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  padding: 0 16px;
+  margin-top: 8px;
+}
+
+.pay-deposit-summary .data-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 0;
+  border-bottom: 1px solid #e5e7eb;
+  font-size: 14px;
+}
+
+.pay-deposit-summary .data-row:last-child {
+  border-bottom: none;
+}
+
+.pay-deposit-summary .data-row strong {
+  color: #111827;
+  font-weight: 600;
+}
+
+.pay-deposit-summary .data-row:first-child strong {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.pay-deposit-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.pay-deposit-actions button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pay-deposit-processing {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 24px 0;
+}
+
+.pay-deposit-success {
+  text-align: center;
+}
+
+.success-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: #10b981;
+  color: #fff;
+  font-size: 24px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 16px;
+}
+
+.api-key-box {
+  background: #ecfdf5;
+  border: 1px solid #10b981;
+  border-radius: 8px;
+  padding: 16px;
+  text-align: left;
+}
+
+.api-key-box p {
+  color: #065f46;
+  font-size: 13px;
+  margin: 0;
+}
+
+/* Spinner */
+.spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid #e5e7eb;
+  border-top-color: #3b82f6;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.small {
+  font-size: 13px;
+}
+
+/* Wallet icon links in DepositDialog */
+.wallet-deeplink-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.wallet-icon-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  transition: transform 0.15s, box-shadow 0.15s;
+  overflow: hidden;
+}
+
+.wallet-icon-link:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.wallet-icon-link[aria-disabled="true"] {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.wallet-icon-link img {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+}
+

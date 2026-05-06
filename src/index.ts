@@ -7,6 +7,10 @@ import { formatMoney, numberFromUnknown, parseMoney, parseMoneyLikeNumber, parse
 import { signDepositAutopayState, signDepositQuote, signLoginState, signSessionState, verifyDepositAutopayState, verifyDepositQuote, verifyLoginState, verifySessionState } from "./signed-state";
 import type { Account, AuthenticatedAccount, AutopayRequestRow, AutopayWalletBalanceEligibility, ChatBody, DepositAutopayState, DepositQuoteState, Env, PaymentRequirement, SessionState, Usage } from "./types";
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 const SESSION_COOKIE_NAME = "meteria402_session";
 const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
 
@@ -39,7 +43,13 @@ export default {
       if (request.method === "POST" && url.pathname === "/api/logout") {
         return handleLogout(request);
       }
+      if (request.method === "POST" && url.pathname === "/api/session/autopay") {
+        return await handleUpdateSessionAutopay(request, env);
+      }
 
+      if (request.method === "GET" && url.pathname === "/api/deposits") {
+        return await handleListDeposits(request, env);
+      }
       if (request.method === "POST" && url.pathname === "/api/deposits/quote") {
         return await handleDepositQuote(request, env);
       }
@@ -85,8 +95,21 @@ export default {
       if (request.method === "POST" && url.pathname === "/api/refund") {
         return await handleRefundRequest(request, env);
       }
-      if (request.method === "POST" && url.pathname === "/v1/chat/completions") {
-        return await handleChatCompletions(request, env, ctx);
+      if (request.method === "GET" && url.pathname === "/api/autopay/capabilities") {
+        return await handleListAutopayCapabilities(request, env);
+      }
+      if (request.method === "POST" && url.pathname === "/api/autopay/capabilities") {
+        return await handleCreateAutopayCapability(request, env);
+      }
+      if (request.method === "DELETE" && /^\/api\/autopay\/capabilities\/[^/]+$/.test(url.pathname)) {
+        return await handleRevokeAutopayCapability(request, env, url.pathname.split("/")[4]);
+      }
+      if (request.method === "POST" && /^\/api\/autopay\/capabilities\/[^/]+\/complete$/.test(url.pathname)) {
+        return await handleCompleteAutopayCapability(request, env, url.pathname.split("/")[4]);
+      }
+      if (request.method === "POST" && url.pathname.startsWith("/v1/")) {
+        const endpoint = url.pathname.slice(4);
+        return await handleV1Request(request, env, ctx, endpoint);
       }
 
       return errorResponse(404, "not_found", "No route matches this request.");
@@ -250,6 +273,42 @@ function handleLogout(request: Request): Response {
   });
 }
 
+async function handleUpdateSessionAutopay(request: Request, env: Env): Promise<Response> {
+  const session = await requireSession(request, env);
+  const body = await readJsonObject(request);
+  const newAutopayUrl = normalizeAutopayUrl(body.autopay_url ?? body.autopayUrl);
+  
+  if (!newAutopayUrl) {
+    return errorResponse(400, "invalid_autopay_url", "autopay_url is required.");
+  }
+
+  const account = await getAccountByOwner(env, session.owner);
+  const now = new Date().toISOString();
+  const expiresAt = Date.now() + SESSION_TTL_SECONDS * 1000;
+  
+  if (account) {
+    await env.DB.prepare(
+      `UPDATE meteria402_accounts SET autopay_url = ?, updated_at = ? WHERE id = ?`
+    ).bind(newAutopayUrl, now, account.id).run();
+  }
+
+  const sessionToken = await signSessionState(env, {
+    owner: session.owner,
+    autopay_url: newAutopayUrl,
+    expires_at: expiresAt,
+  });
+
+  return jsonResponse({
+    owner: session.owner,
+    autopay_url: newAutopayUrl,
+    expires_at: new Date(expiresAt).toISOString(),
+  }, {
+    headers: {
+      "set-cookie": serializeSessionCookie(request, sessionToken, expiresAt),
+    },
+  });
+}
+
 async function handleDepositQuote(request: Request, env: Env): Promise<Response> {
   const body = await readJsonObject(request);
   const amount = parseMoney(String(body.amount ?? env.DEFAULT_MIN_DEPOSIT ?? "5.00"));
@@ -265,7 +324,14 @@ async function handleDepositQuote(request: Request, env: Env): Promise<Response>
     description: "Refundable Meteria402 API deposit",
   });
 
-  const expiresAt = Date.now() + 10 * 60 * 1000;
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const validAfter = nowSeconds - 60; // allow 1 min clock skew
+  const validBefore = nowSeconds + 300; // 5 min expiry
+  const nonceBytes = new Uint8Array(32);
+  crypto.getRandomValues(nonceBytes);
+  const nonce = "0x" + [...nonceBytes].map(b => b.toString(16).padStart(2, "0")).join("");
+
+  const expiresAt = Date.now() + 60 * 60 * 1000;
   const quoteToken = await signDepositQuote(env, {
     payment_id: paymentId,
     kind: "deposit",
@@ -275,11 +341,26 @@ async function handleDepositQuote(request: Request, env: Env): Promise<Response>
     expires_at: expiresAt,
   });
 
+  // Create pending payment record with nonce
+  const dbNow = new Date().toISOString();
+  const authMeta = { nonce, valid_after: String(validAfter), valid_before: String(validBefore) };
+  await env.DB.prepare(
+    `INSERT INTO meteria402_payments (id, kind, amount, currency, status, payment_requirement_json, response_json, created_at)
+     VALUES (?, 'deposit', ?, 'USD', 'pending', ?, ?, ?)`
+  ).bind(paymentId, amount, JSON.stringify(requirement), JSON.stringify(authMeta), dbNow).run();
+
   return jsonResponse({
     payment_id: paymentId,
     amount: formatMoney(amount),
     currency: "USD",
     payment_requirement: requirement,
+    authorization: {
+      to: requirement.accepts[0].payTo,
+      value: requirement.accepts[0].amount,
+      valid_after: String(validAfter),
+      valid_before: String(validBefore),
+      nonce,
+    },
     quote_token: quoteToken,
     expires_at: new Date(expiresAt).toISOString(),
   });
@@ -294,8 +375,9 @@ async function handleDepositSettle(request: Request, env: Env): Promise<Response
   }
   const paymentPayload = body.payment_payload ?? body.paymentPayload ?? null;
   const devProof = typeof body.dev_proof === "string" ? body.dev_proof : undefined;
+  const txHash = typeof body.tx_hash === "string" ? body.tx_hash : typeof body.txHash === "string" ? body.txHash : undefined;
   const session = await readOptionalSession(request, env);
-  const ownerAddress = body.owner_address == null && body.ownerAddress == null
+  let ownerAddress = body.owner_address == null && body.ownerAddress == null
     ? session?.owner ?? null
     : normalizeEvmAddress(body.owner_address ?? body.ownerAddress);
   const autopayUrl = body.autopay_url == null && body.autopayUrl == null
@@ -303,41 +385,157 @@ async function handleDepositSettle(request: Request, env: Env): Promise<Response
     : normalizeAutopayUrl(body.autopay_url ?? body.autopayUrl);
 
   const paymentRequirementJson = JSON.stringify(quote.payment_requirement);
-  const settlement = await verifyPayment(env, paymentRequirementJson, paymentPayload, devProof);
-  if (!settlement.ok) {
-    return errorResponse(402, "payment_required", settlement.message, settlementErrorExtra(settlement));
-  }
 
+  // ─── Check existing payment record early (before verification) ───
   const existingPayment = await env.DB.prepare(
-    `SELECT status FROM meteria402_payments WHERE id = ? AND kind = 'deposit'`
+    `SELECT status, account_id, response_json FROM meteria402_payments WHERE id = ? AND kind = 'deposit'`
   )
     .bind(paymentId)
-    .first<{ status: string }>();
-  if (existingPayment?.status === "settled") {
-    return errorResponse(409, "payment_already_settled", "This deposit payment has already been settled.");
+    .first<{ status: string; account_id: string | null; response_json: string | null }>();
+
+  // Idempotent: already settled
+  if (existingPayment?.status === "settled" && existingPayment.account_id) {
+    const account = await env.DB.prepare(
+      `SELECT id, deposit_balance, owner_address FROM meteria402_accounts WHERE id = ?`
+    ).bind(existingPayment.account_id).first<{ id: string; deposit_balance: number; owner_address: string | null }>();
+
+    if (account) {
+      return jsonResponse({
+        account_id: account.id,
+        deposit_balance: formatMoney(account.deposit_balance),
+        owner_address: account.owner_address,
+        message: "This deposit was already settled.",
+      });
+    }
   }
 
-  const accountId = makeId("acct");
-  const apiKey = await createApiKey();
-  const apiKeyHash = await sha256Hex(apiKey.secret);
+  // ─── Verify payment ───
+  let settlement: { ok: true; txHash?: string; payerAddress?: string; raw?: unknown } | { ok: false; message: string; facilitatorStatus?: number; raw?: unknown };
+  if (txHash) {
+    const txResult = await verifyTxHash(env, txHash, quote.payment_requirement);
+    if (!txResult.ok) {
+      const now = new Date().toISOString();
+      if (!existingPayment) {
+        await env.DB.prepare(
+          `INSERT INTO meteria402_payments (id, kind, amount, currency, status, tx_hash, payment_requirement_json, response_json, created_at)
+           VALUES (?, 'deposit', ?, 'USD', 'verification_failed', ?, ?, ?, ?)`
+        ).bind(paymentId, quote.amount, txHash, paymentRequirementJson, JSON.stringify({ error: txResult.message }), now).run();
+      } else if (existingPayment.status !== "settled") {
+        await env.DB.prepare(
+          `UPDATE meteria402_payments SET status = 'verification_failed', tx_hash = ?, payment_requirement_json = ?, response_json = ? WHERE id = ?`
+        ).bind(txHash, paymentRequirementJson, JSON.stringify({ error: txResult.message }), paymentId).run();
+      }
+      return errorResponse(402, "payment_required", txResult.message);
+    }
+    settlement = { ok: true, txHash: txResult.txHash, payerAddress: txResult.payerAddress, raw: txResult.raw };
+    if (!ownerAddress) {
+      ownerAddress = normalizeEvmAddress(txResult.payerAddress);
+    }
+  } else {
+    // Validate authorization nonce matches what we issued
+    if (paymentPayload && existingPayment?.response_json) {
+      try {
+        const authMeta = JSON.parse(existingPayment.response_json) as Record<string, unknown>;
+        const payload = (paymentPayload as Record<string, unknown> | null)?.payload;
+        const payloadAuth = payload && typeof payload === "object" ? (payload as Record<string, unknown>).authorization : null;
+        if (payloadAuth && typeof payloadAuth === "object") {
+          const submittedNonce = (payloadAuth as Record<string, unknown>).nonce;
+          const expectedNonce = authMeta.nonce;
+          if (submittedNonce !== expectedNonce) {
+            return errorResponse(400, "invalid_nonce", "Payment authorization nonce does not match the quote.");
+          }
+          const validBefore = typeof (payloadAuth as Record<string, unknown>).validBefore === "number"
+            ? (payloadAuth as Record<string, unknown>).validBefore as number
+            : typeof (payloadAuth as Record<string, unknown>).valid_before === "number"
+              ? (payloadAuth as Record<string, unknown>).valid_before as number
+              : null;
+          if (validBefore != null && validBefore < Math.floor(Date.now() / 1000)) {
+            return errorResponse(400, "authorization_expired", "Payment authorization has expired. Please request a new quote.");
+          }
+        }
+      } catch {
+        // ignore parse errors, let facilitator validation catch issues
+      }
+    }
+    // CDP facilitator expects EIP-3009 {signature, authorization} format.
+    // Payload comes from frontend with validAfter/validBefore as strings.
+    const normalizedPayload = paymentPayload;
+
+    settlement = await verifyPayment(env, paymentRequirementJson, normalizedPayload, devProof);
+    if (!settlement.ok) {
+      const now = new Date().toISOString();
+      if (!existingPayment) {
+        await env.DB.prepare(
+          `INSERT INTO meteria402_payments (id, kind, amount, currency, status, payment_requirement_json, response_json, created_at)
+           VALUES (?, 'deposit', ?, 'USD', 'verification_failed', ?, ?, ?)`
+        ).bind(paymentId, quote.amount, paymentRequirementJson, JSON.stringify({ error: settlement.message, ...settlementErrorExtra(settlement) }), now).run();
+      } else if (existingPayment.status !== "settled") {
+        await env.DB.prepare(
+          `UPDATE meteria402_payments SET status = 'verification_failed', payment_requirement_json = ?, response_json = ? WHERE id = ?`
+        ).bind(paymentRequirementJson, JSON.stringify({ error: settlement.message, ...settlementErrorExtra(settlement) }), paymentId).run();
+      }
+      return errorResponse(402, "payment_required", settlement.message, settlementErrorExtra(settlement));
+    }
+  }
+
   const now = new Date().toISOString();
-  const payloadHash = await sha256Hex(JSON.stringify(paymentPayload ?? { dev_proof: devProof, payment_id: paymentId }));
-  const minDeposit = parseMoney(env.DEFAULT_MIN_DEPOSIT ?? "5.00");
-  const concurrencyLimit = parsePositiveInt(env.DEFAULT_CONCURRENCY_LIMIT ?? "1", 1);
+  const payloadHash = await sha256Hex(JSON.stringify(paymentPayload ?? { tx_hash: txHash, dev_proof: devProof, payment_id: paymentId }));
   const existingPayload = await env.DB.prepare(
     `SELECT id FROM meteria402_payments WHERE x402_payload_hash = ?`
   )
     .bind(payloadHash)
-    .first<{ id: string }>();
-  if (existingPayload) {
+    .first<{ id: string; status: string }>();
+  if (existingPayload?.status === "settled") {
     return errorResponse(409, "payment_already_used", "This payment payload has already been settled.");
   }
+
+  const minDeposit = parseMoney(env.DEFAULT_MIN_DEPOSIT ?? "5.00");
+  const concurrencyLimit = parsePositiveInt(env.DEFAULT_CONCURRENCY_LIMIT ?? "1", 1);
+
+  // ─── Check if owner already has an account — if so, top up instead of creating new ───
+  let existingAccount: { id: string; deposit_balance: number } | null = null;
   if (ownerAddress) {
-    const existingOwnerAccount = await getAccountByOwner(env, ownerAddress);
-    if (existingOwnerAccount) {
-      return errorResponse(409, "owner_account_exists", "This owner wallet already has an account.");
-    }
+    existingAccount = await getAccountByOwner(env, ownerAddress);
   }
+
+  if (existingAccount) {
+    // Top-up existing account
+    const newBalance = existingAccount.deposit_balance + quote.amount;
+    await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE meteria402_accounts SET deposit_balance = ?, updated_at = ? WHERE id = ?`
+      ).bind(newBalance, now, existingAccount.id),
+      env.DB.prepare(
+        `INSERT INTO meteria402_payments (id, account_id, kind, amount, currency, status, x402_payload_hash, tx_hash, payment_requirement_json, response_json, created_at, settled_at)
+         VALUES (?, ?, 'deposit', ?, 'USD', 'settled', ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           account_id = excluded.account_id,
+           status = 'settled',
+           x402_payload_hash = excluded.x402_payload_hash,
+           tx_hash = excluded.tx_hash,
+           payment_requirement_json = excluded.payment_requirement_json,
+           response_json = excluded.response_json,
+           settled_at = excluded.settled_at`
+      ).bind(paymentId, existingAccount.id, quote.amount, payloadHash, settlement.txHash ?? null, paymentRequirementJson, JSON.stringify(settlement.raw ?? {}), now, now),
+      env.DB.prepare(
+        `INSERT INTO meteria402_ledger_entries (id, account_id, type, amount, currency, related_payment_id, created_at)
+         VALUES (?, ?, 'deposit_paid', ?, 'USD', ?, ?)`
+      ).bind(makeId("led"), existingAccount.id, quote.amount, paymentId, now),
+    ]);
+
+    return jsonResponse({
+      account_id: existingAccount.id,
+      deposit_balance: formatMoney(newBalance),
+      tx_hash: settlement.txHash,
+      payer_address: settlement.payerAddress,
+      message: "Deposit topped up successfully.",
+    });
+  }
+
+  // ─── Create new account for first-time deposit ───
+  const accountId = makeId("acct");
+  const apiKey = await createApiKey();
+  const apiKeyHash = await sha256Hex(apiKey.secret);
 
   await env.DB.batch([
     env.DB.prepare(
@@ -348,7 +546,15 @@ async function handleDepositSettle(request: Request, env: Env): Promise<Response
     env.DB.prepare(
       `INSERT INTO meteria402_payments
        (id, account_id, kind, amount, currency, status, x402_payload_hash, tx_hash, payment_requirement_json, response_json, created_at, settled_at)
-       VALUES (?, ?, 'deposit', ?, 'USD', 'settled', ?, ?, ?, ?, ?, ?)`
+       VALUES (?, ?, 'deposit', ?, 'USD', 'settled', ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         account_id = excluded.account_id,
+         status = 'settled',
+         x402_payload_hash = excluded.x402_payload_hash,
+         tx_hash = excluded.tx_hash,
+         payment_requirement_json = excluded.payment_requirement_json,
+         response_json = excluded.response_json,
+         settled_at = excluded.settled_at`
     ).bind(paymentId, accountId, quote.amount, payloadHash, settlement.txHash ?? null, paymentRequirementJson, JSON.stringify(settlement.raw ?? {}), now, now),
     env.DB.prepare(
       `INSERT INTO meteria402_api_keys (id, account_id, key_hash, key_prefix, key_suffix, name, expires_at, created_at)
@@ -413,8 +619,7 @@ async function handleDepositAutopayComplete(request: Request, env: Env, paymentI
 }
 
 async function handleGetAccount(request: Request, env: Env): Promise<Response> {
-  const account = await authenticate(request, env);
-  if (account instanceof Response) return account;
+  const account = await requireAccountFromSession(request, env);
 
   return jsonResponse({
     account_id: account.id,
@@ -429,8 +634,7 @@ async function handleGetAccount(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleListApiKeys(request: Request, env: Env): Promise<Response> {
-  const account = await authenticate(request, env);
-  if (account instanceof Response) return account;
+  const account = await requireAccountFromSession(request, env);
 
   const rows = await env.DB.prepare(
     `SELECT id, key_prefix, key_suffix, name, expires_at, created_at, revoked_at
@@ -449,24 +653,67 @@ async function handleListApiKeys(request: Request, env: Env): Promise<Response> 
       revoked_at: string | null;
     }>();
 
+  const keyList = rows.results || [];
+
+  // Aggregate usage stats per key
+  const keyIds = keyList.map((k) => k.id);
+  const statsMap = new Map<string, { calls: number; total_tokens: number; total_cost: number; errors: number }>();
+
+  if (keyIds.length > 0) {
+    const placeholders = keyIds.map(() => "?").join(",");
+    const stats = await env.DB.prepare(
+      `SELECT api_key_id,
+              COUNT(*) AS calls,
+              COALESCE(SUM(total_tokens), 0) AS total_tokens,
+              COALESCE(SUM(final_cost), 0) AS total_cost,
+              COUNT(CASE WHEN status = 'error' OR status = 'pending_reconcile' THEN 1 END) AS errors
+       FROM meteria402_requests
+       WHERE api_key_id IN (${placeholders})
+       GROUP BY api_key_id`
+    )
+      .bind(...keyIds)
+      .all<{
+        api_key_id: string;
+        calls: number;
+        total_tokens: number;
+        total_cost: number;
+        errors: number;
+      }>();
+
+    for (const row of stats.results || []) {
+      statsMap.set(row.api_key_id, {
+        calls: Number(row.calls),
+        total_tokens: Number(row.total_tokens),
+        total_cost: Number(row.total_cost),
+        errors: Number(row.errors),
+      });
+    }
+  }
+
   return jsonResponse({
     current_api_key_id: account.api_key_id,
-    api_keys: rows.results.map((row) => ({
-      id: row.id,
-      name: row.name || "Unnamed key",
-      prefix: row.key_prefix,
-      key_suffix: row.key_suffix,
-      status: keyStatus(row.revoked_at, row.expires_at),
-      expires_at: row.expires_at,
-      created_at: row.created_at,
-      revoked_at: row.revoked_at,
-    })),
+    api_keys: keyList.map((row) => {
+      const stats = statsMap.get(row.id) || { calls: 0, total_tokens: 0, total_cost: 0, errors: 0 };
+      return {
+        id: row.id,
+        name: row.name || "Unnamed key",
+        prefix: row.key_prefix,
+        key_suffix: row.key_suffix,
+        status: keyStatus(row.revoked_at, row.expires_at),
+        expires_at: row.expires_at,
+        created_at: row.created_at,
+        revoked_at: row.revoked_at,
+        calls: stats.calls,
+        total_tokens: stats.total_tokens,
+        total_cost: stats.total_cost,
+        errors: stats.errors,
+      };
+    }),
   });
 }
 
 async function handleCreateApiKey(request: Request, env: Env): Promise<Response> {
-  const account = await authenticate(request, env);
-  if (account instanceof Response) return account;
+  const account = await requireAccountFromSession(request, env);
 
   const body = await readOptionalJsonObject(request);
   const name = normalizeApiKeyName(body.name);
@@ -495,11 +742,7 @@ async function handleCreateApiKey(request: Request, env: Env): Promise<Response>
 }
 
 async function handleRevokeApiKey(request: Request, env: Env, apiKeyId: string): Promise<Response> {
-  const account = await authenticate(request, env);
-  if (account instanceof Response) return account;
-  if (apiKeyId === account.api_key_id) {
-    return errorResponse(409, "cannot_revoke_current_key", "Switch to another API key before revoking the current key.");
-  }
+  const account = await requireAccountFromSession(request, env);
 
   const now = new Date().toISOString();
   const result = await env.DB.prepare(
@@ -522,8 +765,7 @@ async function handleRevokeApiKey(request: Request, env: Env, apiKeyId: string):
 }
 
 async function handleListInvoices(request: Request, env: Env): Promise<Response> {
-  const account = await authenticate(request, env);
-  if (account instanceof Response) return account;
+  const account = await requireAccountFromSession(request, env);
 
   const rows = await env.DB.prepare(
     `SELECT id, request_id, status, amount_due, currency, created_at, paid_at
@@ -551,9 +793,53 @@ async function handleListInvoices(request: Request, env: Env): Promise<Response>
   });
 }
 
+async function handleListDeposits(request: Request, env: Env): Promise<Response> {
+  const account = await requireAccountFromSession(request, env);
+
+  const rows = await env.DB.prepare(
+    `SELECT id, amount, currency, status, tx_hash, response_json, created_at, settled_at
+     FROM meteria402_payments
+     WHERE account_id = ? AND kind = 'deposit'
+     ORDER BY settled_at DESC
+     LIMIT 100`
+  )
+    .bind(account.id)
+    .all<{
+      id: string;
+      amount: number;
+      currency: string;
+      status: string;
+      tx_hash: string | null;
+      response_json: string;
+      created_at: string;
+      settled_at: string | null;
+    }>();
+
+  const deposits = rows.results.map((row) => {
+    let payerAddress: string | null = null;
+    try {
+      const parsed = JSON.parse(row.response_json) as Record<string, unknown>;
+      payerAddress = typeof parsed.payerAddress === "string" ? parsed.payerAddress : null;
+      if (!payerAddress && typeof parsed.payer === "string") payerAddress = parsed.payer;
+    } catch {
+      // ignore parse error
+    }
+    return {
+      id: row.id,
+      amount: formatMoney(row.amount),
+      currency: row.currency,
+      status: row.status,
+      tx_hash: row.tx_hash,
+      payer_address: payerAddress,
+      settled_at: row.settled_at,
+    };
+  });
+
+  return jsonResponse({ deposits });
+}
+
 async function handleListRequests(request: Request, env: Env): Promise<Response> {
-  const account = await authenticate(request, env);
-  if (account instanceof Response) return account;
+  const account = await requireAccountFromSession(request, env);
 
   const rows = await env.DB.prepare(
     `SELECT r.id, r.status, r.model, r.stream, r.ai_gateway_log_id,
@@ -611,8 +897,7 @@ async function handleListRequests(request: Request, env: Env): Promise<Response>
 }
 
 async function handleInvoicePayQuote(request: Request, env: Env, invoiceId: string): Promise<Response> {
-  const account = await authenticate(request, env);
-  if (account instanceof Response) return account;
+  const account = await requireAccountFromSession(request, env);
 
   const invoice = await env.DB.prepare(
     `SELECT id, amount_due, status
@@ -655,8 +940,7 @@ async function handleInvoicePayQuote(request: Request, env: Env, invoiceId: stri
 }
 
 async function handleInvoicePaySettle(request: Request, env: Env, invoiceId: string): Promise<Response> {
-  const account = await authenticate(request, env);
-  if (account instanceof Response) return account;
+  const account = await requireAccountFromSession(request, env);
 
   const body = await readJsonObject(request);
   const paymentId = requireString(body.payment_id, "payment_id");
@@ -727,8 +1011,7 @@ async function handleInvoicePaySettle(request: Request, env: Env, invoiceId: str
 }
 
 async function handleInvoiceAutopayStart(request: Request, env: Env, invoiceId: string): Promise<Response> {
-  const account = await authenticate(request, env);
-  if (account instanceof Response) return account;
+  const account = await requireAccountFromSession(request, env);
 
   const invoice = await env.DB.prepare(
     `SELECT id, amount_due, status
@@ -773,8 +1056,7 @@ async function handleInvoiceAutopayStart(request: Request, env: Env, invoiceId: 
 }
 
 async function handleInvoiceAutopayComplete(request: Request, env: Env, invoiceId: string): Promise<Response> {
-  const account = await authenticate(request, env);
-  if (account instanceof Response) return account;
+  const account = await requireAccountFromSession(request, env);
 
   const body = await readJsonObject(request);
   const paymentId = requireString(body.payment_id, "payment_id");
@@ -828,6 +1110,30 @@ async function startAutopayForPayment(
     payment_requirement_json: string;
   },
 ): Promise<Response> {
+  // Try to use an existing autopay capability first
+  if (payment.account_id) {
+    const capabilityPayload = await tryAutopayWithCapability(env, payment.account_id, payment.payment_requirement_json, payment.amount);
+    if (capabilityPayload) {
+      // Store the capability-based payment result for later settlement
+      await env.DB.prepare(
+        `UPDATE meteria402_payments
+         SET status = 'capability_ready', response_json = ?
+         WHERE id = ?`
+      )
+        .bind(JSON.stringify(capabilityPayload), payment.id)
+        .run();
+
+      return jsonResponse({
+        payment_id: payment.id,
+        invoice_id: payment.invoice_id,
+        status: "approved",
+        payment_payload: capabilityPayload.payment_payload,
+        headers: capabilityPayload.headers,
+        capability_used: true,
+      }, { status: 200 });
+    }
+  }
+
   const autopayUrl = await requirePaymentAccountAutopayUrl(env, payment.account_id);
   const paymentRequired = JSON.parse(payment.payment_requirement_json) as PaymentRequirement;
   const policyValidBefore = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
@@ -895,6 +1201,7 @@ async function startAutopayForDepositQuote(
   });
 
   const body = await response.json().catch(() => null) as Record<string, unknown> | null;
+  console.log("[DEBUG] api/auth/requests response:", JSON.stringify(body, null, 2));
   if (!response.ok || !body) {
     return errorResponse(response.status || 502, "autopay_request_failed", "Autopay authorization request could not be created.", {
       autopay_response: body,
@@ -904,6 +1211,7 @@ async function startAutopayForDepositQuote(
   const autopayRequestId = requireString(body.request_id, "request_id");
   const pollToken = requireString(body.poll_token, "poll_token");
   const verificationUriComplete = requireString(body.verification_uri_complete, "verification_uri_complete");
+  console.log("[DEBUG] verification_uri_complete:", verificationUriComplete);
   const expiresAt = Date.now() + 10 * 60 * 1000;
   const autopayState = await signDepositAutopayState(env, {
     payment_id: quote.payment_id,
@@ -927,6 +1235,30 @@ async function startAutopayForDepositQuote(
 }
 
 async function completeAutopayForPayment(env: Env, paymentId: string): Promise<Record<string, unknown> & { status: string; autopay_request_id?: string; payment_payload?: unknown }> {
+  // Check if a capability-based payment was already prepared
+  const capabilityPayment = await env.DB.prepare(
+    `SELECT status, response_json
+     FROM meteria402_payments
+     WHERE id = ? AND status = 'capability_ready'`
+  )
+    .bind(paymentId)
+    .first<{ status: string; response_json: string }>();
+
+  if (capabilityPayment) {
+    try {
+      const parsed = JSON.parse(capabilityPayment.response_json) as { payment_payload: unknown; headers: Record<string, string> };
+      return {
+        status: "approved",
+        payment_id: paymentId,
+        payment_payload: parsed.payment_payload,
+        selected_requirement: parsed.headers,
+        capability_used: true,
+      };
+    } catch {
+      // Fall through to normal flow if parsing fails
+    }
+  }
+
   const record = await env.DB.prepare(
     `SELECT id, payment_id, account_id, invoice_id, autopay_url, autopay_request_id, poll_token, status, verification_uri_complete
      FROM meteria402_autopay_requests
@@ -1190,8 +1522,7 @@ async function requirePaymentAccountAutopayUrl(env: Env, accountId: string | nul
 }
 
 async function handleRefundRequest(request: Request, env: Env): Promise<Response> {
-  const account = await authenticate(request, env);
-  if (account instanceof Response) return account;
+  const account = await requireAccountFromSession(request, env);
 
   if (account.unpaid_invoice_total > 0) {
     return paymentRequiredResponse("unpaid_invoice", "All unpaid invoices must be paid before a refund can be requested.", {
@@ -1218,11 +1549,312 @@ async function handleRefundRequest(request: Request, env: Env): Promise<Response
   });
 }
 
+async function handleListAutopayCapabilities(request: Request, env: Env): Promise<Response> {
+  const account = await requireAccountFromSession(request, env);
+
+  const rows = await env.DB.prepare(
+    `SELECT id, owner_address, autopay_url, capability_json, max_single_amount, total_budget, spent_amount, valid_before, created_at, revoked_at
+     FROM meteria402_autopay_capabilities
+     WHERE account_id = ?
+     ORDER BY created_at DESC
+     LIMIT 50`
+  )
+    .bind(account.id)
+    .all<{
+      id: string;
+      owner_address: string;
+      autopay_url: string;
+      capability_json: string;
+      max_single_amount: number;
+      total_budget: number;
+      spent_amount: number;
+      valid_before: string;
+      created_at: string;
+      revoked_at: string | null;
+    }>();
+
+  const now = new Date().toISOString();
+  const list = (rows.results || []).map((row) => {
+    const isExpired = row.valid_before < now;
+    const isRevoked = row.revoked_at != null;
+    const remaining = Math.max(0, row.total_budget - row.spent_amount);
+    return {
+      id: row.id,
+      owner_address: row.owner_address,
+      autopay_url: row.autopay_url,
+      max_single_amount: formatMoney(row.max_single_amount),
+      total_budget: formatMoney(row.total_budget),
+      spent_amount: formatMoney(row.spent_amount),
+      remaining_budget: formatMoney(remaining),
+      valid_before: row.valid_before,
+      status: isRevoked ? "revoked" : isExpired ? "expired" : remaining <= 0 ? "depleted" : "active",
+      created_at: row.created_at,
+    };
+  });
+
+  return jsonResponse({ capabilities: list });
+}
+
+async function handleCreateAutopayCapability(request: Request, env: Env): Promise<Response> {
+  const account = await requireAccountFromSession(request, env);
+  const body = await readJsonObject(request);
+
+  if (!account.owner_address || !account.autopay_url) {
+    return errorResponse(400, "missing_autopay_setup", "Account must have an autopay setup to create capabilities.");
+  }
+
+  const autopayUrl = normalizeAutopayUrl(body.autopay_url ?? account.autopay_url);
+  const totalBudget = parseMoney(String(body.total_budget ?? "5.00"));
+  const maxSingleAmount = parseMoney(String(body.max_single_amount ?? body.total_budget ?? "5.00"));
+  const ttlDays = typeof body.ttl_days === "number" ? Math.max(1, Math.min(30, body.ttl_days)) : 7;
+  const validBefore = new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1000).toISOString();
+
+  // First, create an auth request via autopay worker
+  const authResponse = await fetch(`${autopayUrl}/api/auth/requests`, {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      kind: "payment",
+      returnOrigin: new URL(request.url).origin,
+      ttlSeconds: 300,
+      policy: {
+        allowedOrigins: [new URL(request.url).origin],
+        allowedPayTo: [requireRecipientAddress(env)],
+        network: env.X402_NETWORK || BASE_MAINNET,
+        asset: env.X402_ASSET || BASE_USDC,
+        maxSingleAmount: x402AmountFromMicroUsd(maxSingleAmount, env),
+        totalBudget: x402AmountFromMicroUsd(totalBudget, env),
+        validBefore,
+      },
+      policyValidBefore: validBefore,
+    }),
+  });
+
+  const authBody = await authResponse.json().catch(() => null) as Record<string, unknown> | null;
+  if (!authResponse.ok || !authBody) {
+    return errorResponse(authResponse.status || 502, "autopay_auth_request_failed", "Could not create autopay authorization request.", {
+      autopay_response: authBody,
+    });
+  }
+
+  const authRequestId = requireString(authBody.request_id, "request_id");
+  const pollToken = requireString(authBody.poll_token, "poll_token");
+  const verificationUriComplete = requireString(authBody.verification_uri_complete, "verification_uri_complete");
+  const websocketUriComplete = typeof authBody.websocket_uri_complete === "string" ? authBody.websocket_uri_complete : "";
+
+  // Return the auth request details; the client must poll/approve via the autopay worker page
+  return jsonResponse({
+    capability_id: authRequestId,
+    status: "pending_approval",
+    verification_uri_complete: verificationUriComplete,
+    websocket_uri_complete: websocketUriComplete,
+    poll_token: pollToken,
+    autopay_url: autopayUrl,
+    total_budget: formatMoney(totalBudget),
+    max_single_amount: formatMoney(maxSingleAmount),
+    valid_before: validBefore,
+    ttl_days: ttlDays,
+    message: "Approve this authorization on the autopay worker page. Polling will complete when done.",
+  }, { status: 201 });
+}
+
+async function handleRevokeAutopayCapability(request: Request, env: Env, capabilityId: string): Promise<Response> {
+  const account = await requireAccountFromSession(request, env);
+
+  const now = new Date().toISOString();
+  const result = await env.DB.prepare(
+    `UPDATE meteria402_autopay_capabilities
+     SET revoked_at = COALESCE(revoked_at, ?)
+     WHERE id = ? AND account_id = ?`
+  )
+    .bind(now, capabilityId, account.id)
+    .run();
+
+  if (result.meta.changes === 0) {
+    return errorResponse(404, "capability_not_found", "Autopay capability was not found.");
+  }
+
+  return jsonResponse({
+    capability_id: capabilityId,
+    status: "revoked",
+    revoked_at: now,
+  });
+}
+
+async function handleCompleteAutopayCapability(request: Request, env: Env, capabilityId: string): Promise<Response> {
+  const account = await requireAccountFromSession(request, env);
+  const body = await readJsonObject(request);
+
+  const autopayUrl = normalizeAutopayUrl(body.autopay_url ?? account.autopay_url);
+  const pollToken = requireString(body.poll_token, "poll_token");
+
+  // Poll the autopay worker for approval
+  const pollResponse = await fetch(`${autopayUrl}/api/auth/requests/${encodeURIComponent(capabilityId)}/poll`, {
+    headers: { "x-autopay-poll-token": pollToken },
+  });
+  const pollBody = await pollResponse.json().catch(() => null) as Record<string, unknown> | null;
+  if (!pollResponse.ok || !pollBody) {
+    throw new HttpError(pollResponse.status || 502, "autopay_poll_failed", "Could not poll autopay authorization status.");
+  }
+
+  const status = requireString(pollBody.status, "status");
+  if (status !== "approved") {
+    return jsonResponse({
+      status,
+      capability_id: capabilityId,
+      expires_at: pollBody.expires_at,
+    });
+  }
+
+  const authorization = pollBody.authorization as Record<string, unknown> | undefined;
+  const owner = typeof authorization?.owner === "string" ? authorization.owner : "";
+  if (!owner) {
+    throw new HttpError(502, "invalid_autopay_authorization", "Autopay approval did not include owner wallet.");
+  }
+
+  const siweMessage = typeof authorization?.siwe_message === "string" ? authorization.siwe_message : "";
+  const siweSignature = typeof authorization?.siwe_signature === "string" ? authorization.siwe_signature : "";
+  const capability = authorization?.capability as Record<string, unknown> | undefined;
+  if (!siweMessage || !siweSignature || !capability) {
+    throw new HttpError(502, "incomplete_autopay_authorization", "Autopay authorization is missing required fields.");
+  }
+
+  const totalBudget = parseMoney(String(body.total_budget ?? "5.00"));
+  const maxSingleAmount = parseMoney(String(body.max_single_amount ?? body.total_budget ?? "5.00"));
+  const validBefore = typeof capability.validBefore === "string" ? capability.validBefore : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  const now = new Date().toISOString();
+  const capId = makeId("cap");
+
+  await env.DB.prepare(
+    `INSERT INTO meteria402_autopay_capabilities
+     (id, account_id, owner_address, autopay_url, siwe_message, siwe_signature, capability_json, max_single_amount, total_budget, spent_amount, valid_before, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`
+  )
+    .bind(capId, account.id, normalizeEvmAddress(owner), autopayUrl, siweMessage, siweSignature, JSON.stringify(capability), maxSingleAmount, totalBudget, validBefore, now)
+    .run();
+
+  return jsonResponse({
+    capability_id: capId,
+    status: "active",
+    owner_address: normalizeEvmAddress(owner),
+    autopay_url: autopayUrl,
+    total_budget: formatMoney(totalBudget),
+    max_single_amount: formatMoney(maxSingleAmount),
+    valid_before: validBefore,
+    created_at: now,
+  }, { status: 201 });
+}
+
+async function getActiveAutopayCapability(
+  env: Env,
+  accountId: string,
+  amount: number,
+): Promise<{ id: string; siwe_message: string; siwe_signature: string; capability_json: string; autopay_url: string } | null> {
+  const now = new Date().toISOString();
+  const row = await env.DB.prepare(
+    `SELECT id, siwe_message, siwe_signature, capability_json, autopay_url
+     FROM meteria402_autopay_capabilities
+     WHERE account_id = ?
+       AND revoked_at IS NULL
+       AND valid_before > ?
+       AND (spent_amount + ?) <= total_budget
+       AND max_single_amount >= ?
+     ORDER BY created_at DESC
+     LIMIT 1`
+  )
+    .bind(accountId, now, amount, amount)
+    .first<{
+      id: string;
+      siwe_message: string;
+      siwe_signature: string;
+      capability_json: string;
+      autopay_url: string;
+    }>();
+
+  return row ?? null;
+}
+
+async function deductCapabilityBudget(env: Env, capabilityId: string, amount: number): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE meteria402_autopay_capabilities
+     SET spent_amount = spent_amount + ?
+     WHERE id = ?
+       AND revoked_at IS NULL
+       AND (spent_amount + ?) <= total_budget`
+  )
+    .bind(amount, capabilityId, amount)
+    .run();
+}
+
+async function tryAutopayWithCapability(
+  env: Env,
+  accountId: string,
+  paymentRequirementJson: string,
+  amount: number,
+): Promise<{ payment_payload: unknown; headers: Record<string, string> } | null> {
+  const capability = await getActiveAutopayCapability(env, accountId, amount);
+  if (!capability) return null;
+
+  try {
+    const response = await fetch(`${capability.autopay_url}/api/pay`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        paymentRequired: JSON.parse(paymentRequirementJson),
+        siweMessage: capability.siwe_message,
+        siweSignature: capability.siwe_signature,
+      }),
+    });
+
+    const body = await response.json().catch(() => null) as Record<string, unknown> | null;
+    if (!response.ok || !body || !body.payment_payload) {
+      console.warn("Capability pay failed", { status: response.status, body });
+      return null;
+    }
+
+    // Deduct budget only after successful payment creation
+    await deductCapabilityBudget(env, capability.id, amount);
+
+    return {
+      payment_payload: body.payment_payload,
+      headers: (body.headers as Record<string, string>) || {},
+    };
+  } catch (error) {
+    console.warn("Capability pay error", error);
+    return null;
+  }
+}
+
+async function tryAutoPayInvoice(
+  env: Env,
+  accountId: string,
+  amount: number,
+  requirement: PaymentRequirement,
+): Promise<{ ok: true; method: string } | { ok: false }> {
+  const account = await getAccount(env, accountId);
+  if (!account) return { ok: false };
+
+  // 1. 尝试用 excess deposit 支付（deposit_balance - min_deposit_required）
+  const excess = account.deposit_balance - account.min_deposit_required;
+  if (excess >= amount) {
+    return { ok: true, method: "excess_deposit" };
+  }
+
+  // 2. 尝试 capability autopay
+  const capResult = await tryAutopayWithCapability(env, accountId, JSON.stringify(requirement), amount);
+  if (capResult) {
+    return { ok: true, method: "capability" };
+  }
+
+  return { ok: false };
+}
+
 async function handleChatCompletions(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const account = await authenticate(request, env);
   if (account instanceof Response) return account;
 
-  if (!env.CLOUDFLARE_ACCOUNT_ID) {
+  if (!env.CLOUDFLARE_ACCOUNT_ID && !env.UPSTREAM_BASE_URL) {
     return errorResponse(500, "missing_ai_gateway_config", "Cloudflare account ID is not configured.");
   }
 
@@ -1236,10 +1868,10 @@ async function handleChatCompletions(request: Request, env: Env, ctx: ExecutionC
   }
 
   const requestId = makeId("req");
-  const started = await startMeteredRequest(env, account.id, requestId, String(body.model ?? ""), stream);
+  const started = await startMeteredRequest(env, account.id, account.api_key_id, requestId, String(body.model ?? ""), stream);
   if (started instanceof Response) return started;
 
-  const upstreamRequest = buildAiGatewayRequest(env, body);
+  const upstreamRequest = buildAiGatewayRequest(env, JSON.stringify(body), "chat/completions", "application/json");
   let upstreamResponse: Response;
   try {
     upstreamResponse = await fetch(upstreamRequest);
@@ -1278,9 +1910,111 @@ async function handleChatCompletions(request: Request, env: Env, ctx: ExecutionC
   const cost = calculateCost(body.model, usage, env);
   const invoice = await settleMeteredRequest(env, account.id, requestId, body.model, usage, cost, upstreamResponse.headers);
   headers.set("meteria402-invoice-id", invoice.invoiceId);
-  headers.set("meteria402-amount-due", formatMoney(cost));
+  if (invoice.autoPaid) {
+    headers.set("meteria402-auto-paid", "true");
+    headers.set("meteria402-auto-pay-method", invoice.autoPayMethod ?? "");
+  } else {
+    headers.set("meteria402-amount-due", formatMoney(cost));
+  }
 
   return new Response(responseText, {
+    status: upstreamResponse.status,
+    statusText: upstreamResponse.statusText,
+    headers,
+  });
+}
+
+async function handleV1Request(request: Request, env: Env, ctx: ExecutionContext, endpoint: string): Promise<Response> {
+  if (endpoint === "chat/completions") {
+    return handleChatCompletions(request, env, ctx);
+  }
+  return handleGenericV1Endpoint(request, env, endpoint);
+}
+
+async function handleGenericV1Endpoint(request: Request, env: Env, endpoint: string): Promise<Response> {
+  const account = await authenticate(request, env);
+  if (account instanceof Response) return account;
+
+  if (!env.CLOUDFLARE_ACCOUNT_ID && !env.UPSTREAM_BASE_URL) {
+    return errorResponse(500, "missing_ai_gateway_config", "Cloudflare account ID is not configured.");
+  }
+
+  const contentType = request.headers.get("content-type") || "";
+  const isJsonBody = contentType.includes("application/json");
+
+  let bodyJson: Record<string, unknown> | null = null;
+  let upstreamBody: BodyInit;
+
+  if (isJsonBody) {
+    try {
+      const bodyClone = request.clone() as Request;
+      bodyJson = await readJsonObject(bodyClone);
+      upstreamBody = JSON.stringify(bodyJson);
+    } catch {
+      upstreamBody = await request.arrayBuffer();
+    }
+  } else {
+    upstreamBody = await request.arrayBuffer();
+  }
+
+  const model = typeof bodyJson?.model === "string" ? bodyJson.model : endpoint;
+  const requestId = makeId("req");
+  const started = await startMeteredRequest(env, account.id, account.api_key_id, requestId, model, false);
+  if (started instanceof Response) return started;
+
+  const upstreamRequest = buildAiGatewayRequest(env, upstreamBody, endpoint, contentType);
+  let upstreamResponse: Response;
+  try {
+    upstreamResponse = await fetch(upstreamRequest);
+  } catch (error) {
+    await failMeteredRequest(env, account.id, requestId, "upstream_fetch_failed");
+    console.error("AI Gateway request failed", error);
+    return errorResponse(502, "upstream_fetch_failed", "The upstream AI Gateway request failed.");
+  }
+
+  if (!upstreamResponse.ok) {
+    await failMeteredRequest(env, account.id, requestId, `upstream_${upstreamResponse.status}`);
+    return copyResponse(upstreamResponse, { "meteria402-request-id": requestId });
+  }
+
+  const responseContentType = upstreamResponse.headers.get("content-type") || "";
+  const responseIsJson = responseContentType.includes("application/json");
+
+  let usage: Usage | null = null;
+  let responseBody: ArrayBuffer | string;
+
+  if (responseIsJson) {
+    const responseText = await upstreamResponse.text();
+    responseBody = responseText;
+    usage = extractUsageFromText(responseText);
+  } else {
+    responseBody = await upstreamResponse.arrayBuffer();
+  }
+
+  const headers = cloneHeaders(upstreamResponse.headers);
+  headers.set("meteria402-request-id", requestId);
+
+  if (!usage) {
+    await markPendingReconcile(env, account.id, requestId);
+    headers.set("meteria402-reconcile", "pending");
+    return new Response(responseBody, {
+      status: upstreamResponse.status,
+      statusText: upstreamResponse.statusText,
+      headers,
+    });
+  }
+
+  const cost = calculateCost(model, usage, env);
+  const invoice = await settleMeteredRequest(env, account.id, requestId, model, usage, cost, upstreamResponse.headers);
+  headers.set("meteria402-invoice-id", invoice.invoiceId);
+  if (invoice.autoPaid) {
+    headers.set("meteria402-auto-paid", "true");
+    headers.set("meteria402-auto-pay-method", invoice.autoPayMethod ?? "");
+  } else {
+    headers.set("meteria402-amount-due", formatMoney(cost));
+  }
+
+  return new Response(responseBody, {
     status: upstreamResponse.status,
     statusText: upstreamResponse.statusText,
     headers,
@@ -1290,6 +2024,7 @@ async function handleChatCompletions(request: Request, env: Env, ctx: ExecutionC
 async function startMeteredRequest(
   env: Env,
   accountId: string,
+  apiKeyId: string,
   requestId: string,
   model: string,
   stream: boolean,
@@ -1332,10 +2067,10 @@ async function startMeteredRequest(
 
   try {
     await env.DB.prepare(
-      `INSERT INTO meteria402_requests (id, account_id, status, model, stream, started_at)
-       VALUES (?, ?, 'running', ?, ?, ?)`
+      `INSERT INTO meteria402_requests (id, account_id, api_key_id, status, model, stream, started_at)
+       VALUES (?, ?, ?, 'running', ?, ?, ?)`
     )
-      .bind(requestId, accountId, model || null, stream ? 1 : 0, now)
+      .bind(requestId, accountId, apiKeyId, model || null, stream ? 1 : 0, now)
       .run();
   } catch (error) {
     await decrementActiveRequest(env, accountId);
@@ -1385,7 +2120,7 @@ async function settleMeteredRequest(
   usage: Usage,
   cost: number,
   upstreamHeaders: Headers,
-): Promise<{ invoiceId: string }> {
+): Promise<{ invoiceId: string; autoPaid: boolean; autoPayMethod?: string }> {
   const now = new Date().toISOString();
   const invoiceId = makeId("inv");
   const aigLogId = upstreamHeaders.get("cf-aig-log-id") ?? upstreamHeaders.get("cf-ai-gateway-log-id");
@@ -1397,39 +2132,82 @@ async function settleMeteredRequest(
     description: `Meteria402 invoice ${invoiceId}`,
   });
 
-  await env.DB.batch([
-    env.DB.prepare(
-      `UPDATE meteria402_requests
-       SET status = 'completed',
-           model = COALESCE(?, model),
-           ai_gateway_log_id = ?,
-           input_tokens = ?,
-           output_tokens = ?,
-           total_tokens = ?,
-           final_cost = ?,
-           completed_at = ?
-       WHERE id = ? AND account_id = ?`
-    ).bind(String(model ?? "") || null, aigLogId, usage.inputTokens, usage.outputTokens, usage.totalTokens, cost, now, requestId, accountId),
-    env.DB.prepare(
-      `INSERT INTO meteria402_invoices
-       (id, account_id, request_id, status, amount_due, currency, payment_requirement_json, created_at)
-       VALUES (?, ?, ?, 'unpaid', ?, 'USD', ?, ?)`
-    ).bind(invoiceId, accountId, requestId, cost, JSON.stringify(requirement), now),
-    env.DB.prepare(
-      `UPDATE meteria402_accounts
-       SET active_request_count = MAX(0, active_request_count - 1),
-           unpaid_invoice_total = unpaid_invoice_total + ?,
-           updated_at = ?
-       WHERE id = ?`
-    ).bind(cost, now, accountId),
-    env.DB.prepare(
-      `INSERT INTO meteria402_ledger_entries
-       (id, account_id, type, amount, currency, related_request_id, related_invoice_id, created_at)
-       VALUES (?, ?, 'invoice_created', ?, 'USD', ?, ?, ?)`
-    ).bind(makeId("led"), accountId, cost, requestId, invoiceId, now),
-  ]);
+  // Step 1: 先更新 request 状态
+  await env.DB.prepare(
+    `UPDATE meteria402_requests
+     SET status = 'completed',
+         model = COALESCE(?, model),
+         ai_gateway_log_id = ?,
+         input_tokens = ?,
+         output_tokens = ?,
+         total_tokens = ?,
+         final_cost = ?,
+         completed_at = ?
+     WHERE id = ? AND account_id = ?`
+  ).bind(String(model ?? "") || null, aigLogId, usage.inputTokens, usage.outputTokens, usage.totalTokens, cost, now, requestId, accountId)
+    .run();
 
-  return { invoiceId };
+  // Step 2: 尝试自动支付
+  const autoPay = await tryAutoPayInvoice(env, accountId, cost, requirement);
+
+  if (autoPay.ok) {
+    // 自动支付成功：invoice 直接 paid
+    const ledgerId = makeId("led");
+    const batch: D1PreparedStatement[] = [
+      env.DB.prepare(
+        `INSERT INTO meteria402_invoices
+         (id, account_id, request_id, status, amount_due, currency, payment_requirement_json, created_at, paid_at)
+         VALUES (?, ?, ?, 'paid', ?, 'USD', ?, ?, ?)`
+      ).bind(invoiceId, accountId, requestId, cost, JSON.stringify(requirement), now, now),
+      env.DB.prepare(
+        `UPDATE meteria402_accounts
+         SET active_request_count = MAX(0, active_request_count - 1),
+             updated_at = ?
+         WHERE id = ?`
+      ).bind(now, accountId),
+      env.DB.prepare(
+        `INSERT INTO meteria402_ledger_entries
+         (id, account_id, type, amount, currency, related_request_id, related_invoice_id, created_at)
+         VALUES (?, ?, 'invoice_paid', ?, 'USD', ?, ?, ?)`
+      ).bind(ledgerId, accountId, cost, requestId, invoiceId, now),
+    ];
+
+    if (autoPay.method === "excess_deposit") {
+      batch.push(
+        env.DB.prepare(
+          `UPDATE meteria402_accounts
+           SET deposit_balance = deposit_balance - ?,
+               updated_at = ?
+           WHERE id = ?`
+        ).bind(cost, now, accountId)
+      );
+    }
+
+    await env.DB.batch(batch);
+  } else {
+    // 挂账
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO meteria402_invoices
+         (id, account_id, request_id, status, amount_due, currency, payment_requirement_json, created_at)
+         VALUES (?, ?, ?, 'unpaid', ?, 'USD', ?, ?)`
+      ).bind(invoiceId, accountId, requestId, cost, JSON.stringify(requirement), now),
+      env.DB.prepare(
+        `UPDATE meteria402_accounts
+         SET active_request_count = MAX(0, active_request_count - 1),
+             unpaid_invoice_total = unpaid_invoice_total + ?,
+             updated_at = ?
+         WHERE id = ?`
+      ).bind(cost, now, accountId),
+      env.DB.prepare(
+        `INSERT INTO meteria402_ledger_entries
+         (id, account_id, type, amount, currency, related_request_id, related_invoice_id, created_at)
+         VALUES (?, ?, 'invoice_created', ?, 'USD', ?, ?, ?)`
+      ).bind(makeId("led"), accountId, cost, requestId, invoiceId, now),
+    ]);
+  }
+
+  return { invoiceId, autoPaid: autoPay.ok, autoPayMethod: autoPay.ok ? autoPay.method : undefined };
 }
 
 async function decrementActiveRequest(env: Env, accountId: string): Promise<void> {
@@ -1507,11 +2285,27 @@ function proxyStreamingResponse(
   });
 }
 
-function buildAiGatewayRequest(env: Env, body: ChatBody): Request {
+function buildAiGatewayRequest(env: Env, body: BodyInit, endpoint: string, contentType: string | null): Request {
+  const upstreamUrl = env.UPSTREAM_BASE_URL;
+  if (upstreamUrl) {
+    const url = `${upstreamUrl.replace(/\/$/, "")}/${endpoint}`;
+    const headers = new Headers();
+    if (contentType) {
+      headers.set("content-type", contentType);
+    }
+    return new Request(url, {
+      method: "POST",
+      headers,
+      body,
+    });
+  }
+
   const gatewayId = env.AI_GATEWAY_ID || "default";
-  const url = `https://gateway.ai.cloudflare.com/v1/${encodeURIComponent(env.CLOUDFLARE_ACCOUNT_ID || "")}/${encodeURIComponent(gatewayId)}/compat/chat/completions`;
+  const url = `https://gateway.ai.cloudflare.com/v1/${encodeURIComponent(env.CLOUDFLARE_ACCOUNT_ID || "")}/${encodeURIComponent(gatewayId)}/compat/${endpoint}`;
   const headers = new Headers();
-  headers.set("content-type", "application/json");
+  if (contentType) {
+    headers.set("content-type", contentType);
+  }
   if (env.AI_GATEWAY_API_KEY) {
     headers.set("authorization", `Bearer ${env.AI_GATEWAY_API_KEY}`);
   }
@@ -1521,7 +2315,7 @@ function buildAiGatewayRequest(env: Env, body: ChatBody): Request {
   return new Request(url, {
     method: "POST",
     headers,
-    body: JSON.stringify(body),
+    body,
   });
 }
 
@@ -1619,6 +2413,18 @@ async function authenticate(request: Request, env: Env): Promise<AuthenticatedAc
   return account;
 }
 
+async function requireAccountFromSession(request: Request, env: Env): Promise<AuthenticatedAccount> {
+  const session = await requireSession(request, env);
+  const account = await getAccountByOwner(env, session.owner);
+  if (!account) {
+    throw new HttpError(401, "account_not_found", "No account found for this session.");
+  }
+  return {
+    ...account,
+    api_key_id: "", // session-authenticated callers don't have a single API key context
+  };
+}
+
 async function getAccount(env: Env, accountId: string): Promise<Account | null> {
   return env.DB.prepare(
     `SELECT id, status, owner_address, autopay_url, deposit_balance, unpaid_invoice_total, active_request_count,
@@ -1668,7 +2474,12 @@ async function verifyPayment(
   const facilitatorHeaders = new Headers({
     "content-type": "application/json",
   });
-  if (env.X402_FACILITATOR_AUTH_TOKEN) {
+  const cdpKeyId = (env as unknown as Record<string, string | undefined>).CDP_API_KEY_ID;
+  const cdpSecret = (env as unknown as Record<string, string | undefined>).CDP_API_KEY_SECRET;
+  if (cdpKeyId && cdpSecret) {
+    const jwt = await generateCDPJWT(cdpKeyId, cdpSecret, "POST", "api.cdp.coinbase.com", "/platform/v2/x402/settle");
+    facilitatorHeaders.set("authorization", `Bearer ${jwt}`);
+  } else if (env.X402_FACILITATOR_AUTH_TOKEN) {
     facilitatorHeaders.set("authorization", `Bearer ${env.X402_FACILITATOR_AUTH_TOKEN}`);
   }
 
@@ -1679,6 +2490,7 @@ async function verifyPayment(
   });
 
   const text = await response.text();
+  console.warn("[x402 settle] status:", response.status, "body:", text.substring(0, 2000));
   let json: Record<string, unknown> = {};
   try {
     json = text ? JSON.parse(text) as Record<string, unknown> : {};
@@ -1721,6 +2533,105 @@ function settlementErrorExtra(settlement: { facilitatorStatus?: number; raw?: un
     facilitator_status: settlement.facilitatorStatus,
     facilitator_response: settlement.raw ?? null,
   };
+}
+
+function base64UrlEncode(str: string): string {
+  return btoa(str).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+}
+
+function derToRawP256(der: Uint8Array): Uint8Array {
+  let idx = 2; // skip 0x30 and total length
+  if (der[0] !== 0x30) throw new Error("Invalid DER signature");
+
+  if (der[idx] !== 0x02) throw new Error("Invalid DER r tag");
+  const rLen = der[idx + 1];
+  let r = der.slice(idx + 2, idx + 2 + rLen);
+  idx += 2 + rLen;
+
+  if (der[idx] !== 0x02) throw new Error("Invalid DER s tag");
+  const sLen = der[idx + 1];
+  let s = der.slice(idx + 2, idx + 2 + sLen);
+
+  const result = new Uint8Array(64);
+  result.set(r.slice(-32), Math.max(0, 32 - r.length));
+  result.set(s.slice(-32), 32 + Math.max(0, 32 - s.length));
+  return result;
+}
+
+function buildEd25519Pkcs8(seed: Uint8Array): Uint8Array {
+  // Ed25519 PKCS#8 DER: SEQUENCE{version(0), AlgorithmIdentifier(OID Ed25519), privateKey(OCTET{OCTET{seed}})}
+  const version = [0x02, 0x01, 0x00];
+  const algId = [0x30, 0x05, 0x06, 0x03, 0x2B, 0x65, 0x70]; // OID 1.3.101.112
+  const innerOctet = [0x04, 0x20, ...seed]; // OCTET STRING 32 bytes
+  const outerOctet = [0x04, innerOctet.length, ...innerOctet];
+  const content = [...version, ...algId, ...outerOctet];
+  return new Uint8Array([0x30, content.length, ...content]);
+}
+
+async function generateCDPJWT(
+  apiKeyId: string,
+  apiKeySecret: string,
+  method: string,
+  host: string,
+  path: string
+): Promise<string> {
+  const trimmed = apiKeySecret.trim();
+  const now = Math.floor(Date.now() / 1000);
+  const nonce = Array.from(crypto.getRandomValues(new Uint8Array(16)))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+
+  const claims = {
+    iss: "cdp",
+    sub: apiKeyId,
+    aud: ["cdp"],
+    iat: now,
+    nbf: now,
+    exp: now + 120,
+    uris: [`${method} ${host}${path}`],
+  };
+
+  const headerB64 = base64UrlEncode(JSON.stringify({ alg: "EdDSA", typ: "JWT", kid: apiKeyId, nonce }));
+  const payloadB64 = base64UrlEncode(JSON.stringify(claims));
+  const signingInput = new TextEncoder().encode(`${headerB64}.${payloadB64}`);
+
+  // PEM EC key
+  if (trimmed.includes("BEGIN EC PRIVATE KEY")) {
+    const base64 = trimmed
+      .replace(/-----BEGIN EC PRIVATE KEY-----/g, "")
+      .replace(/-----END EC PRIVATE KEY-----/g, "")
+      .replace(/\s/g, "");
+    const binary = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+    const privateKey = await crypto.subtle.importKey(
+      "pkcs8",
+      binary.buffer,
+      { name: "ECDSA", namedCurve: "P-256" },
+      false,
+      ["sign"]
+    );
+    const ecHeaderB64 = base64UrlEncode(JSON.stringify({ alg: "ES256", typ: "JWT", kid: apiKeyId, nonce }));
+    const ecSigningInput = new TextEncoder().encode(`${ecHeaderB64}.${payloadB64}`);
+    const signature = await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" },
+      privateKey,
+      ecSigningInput
+    );
+    const rawSig = derToRawP256(new Uint8Array(signature));
+    const sigB64 = base64UrlEncode(String.fromCharCode(...rawSig));
+    return `${ecHeaderB64}.${payloadB64}.${sigB64}`;
+  }
+
+  // Ed25519 base64 key (64 bytes: 32 seed + 32 pubkey)
+  const decoded = Uint8Array.from(atob(trimmed), (c) => c.charCodeAt(0));
+  if (decoded.length !== 64) {
+    throw new Error(`Invalid CDP API key secret length. Expected 64 bytes (base64 Ed25519) or PEM EC key. Got ${decoded.length} bytes.`);
+  }
+  const seed = decoded.slice(0, 32);
+  const pkcs8 = buildEd25519Pkcs8(seed);
+  const privateKey = await crypto.subtle.importKey("pkcs8", pkcs8.buffer as ArrayBuffer, "Ed25519", false, ["sign"]);
+  const signature = await crypto.subtle.sign("Ed25519", privateKey, signingInput);
+  const sigB64 = base64UrlEncode(String.fromCharCode(...new Uint8Array(signature)));
+  return `${headerB64}.${payloadB64}.${sigB64}`;
 }
 
 function facilitatorEndpoint(baseUrl: string, action: "settle" | "verify"): string {
@@ -1836,6 +2747,96 @@ function normalizeEvmAddress(value: unknown): string {
     throw new HttpError(400, "invalid_address", "A valid EVM address is required.");
   }
   return value;
+}
+
+async function rpcCall<T = unknown>(rpcUrl: string, method: string, params: unknown[]): Promise<T> {
+  const response = await fetch(rpcUrl, {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+  });
+  const body = await response.json().catch(() => null) as { result?: T; error?: unknown } | null;
+  if (!response.ok || !body || body.error) {
+    throw new HttpError(502, "rpc_error", `RPC call ${method} failed.`, {
+      rpc_status: response.status,
+      rpc_error: body?.error ?? null,
+    });
+  }
+  return body.result!;
+}
+
+async function verifyTxHash(
+  env: Env,
+  txHash: string,
+  expectedRequirement: PaymentRequirement,
+): Promise<{ ok: true; txHash: string; payerAddress: string; raw?: unknown } | { ok: false; message: string }> {
+  const rpcUrl = getRpcUrl(env);
+  const accept = expectedRequirement.accepts[0];
+  if (!accept) return { ok: false, message: "Payment requirement is missing accept details." };
+
+  const expectedToken = accept.asset.toLowerCase();
+  const expectedRecipient = accept.payTo.toLowerCase();
+  const expectedAmount = accept.amount;
+  const maxRetries = 15;
+  const baseDelay = 1000;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const receipt = await rpcCall<Record<string, unknown> | null>(rpcUrl, "eth_getTransactionReceipt", [txHash]);
+      if (!receipt) {
+        if (attempt < maxRetries) {
+          await sleep(baseDelay * (attempt + 1));
+          continue;
+        }
+        return { ok: false, message: "Transaction not found on chain after multiple attempts." };
+      }
+      if (receipt.status === "0x0" || receipt.status === false) {
+        return { ok: false, message: "Transaction failed on chain." };
+      }
+
+      const tx = await rpcCall<Record<string, string> | null>(rpcUrl, "eth_getTransactionByHash", [txHash]);
+      if (!tx) {
+        return { ok: false, message: "Transaction not found." };
+      }
+
+      if (tx.to?.toLowerCase() !== expectedToken) {
+        return { ok: false, message: "Transaction is not for the expected USDC contract." };
+      }
+
+      const input = tx.input;
+      if (!input || !input.startsWith("0xa9059cbb")) {
+        return { ok: false, message: "Transaction is not an ERC-20 transfer." };
+      }
+
+      const recipientHex = input.slice(34, 74).toLowerCase();
+      const recipient = `0x${recipientHex}`;
+      const amountHex = input.slice(74, 138);
+      const amount = BigInt(`0x${amountHex}`).toString();
+
+      if (recipient !== expectedRecipient) {
+        return { ok: false, message: "Transfer recipient does not match expected address." };
+      }
+
+      if (amount !== expectedAmount) {
+        return { ok: false, message: "Transfer amount does not match expected amount." };
+      }
+
+      return {
+        ok: true,
+        txHash,
+        payerAddress: tx.from,
+        raw: { receipt, transaction: tx },
+      };
+    } catch (error) {
+      if (attempt < maxRetries) {
+        await sleep(baseDelay * (attempt + 1));
+        continue;
+      }
+      const message = error instanceof HttpError ? error.message : "Transaction verification failed after multiple attempts.";
+      return { ok: false, message };
+    }
+  }
+  return { ok: false, message: "Transaction verification timed out." };
 }
 
 async function readErc20Balance(rpcUrl: string, asset: string, owner: string): Promise<bigint> {
