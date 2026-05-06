@@ -1,27 +1,8 @@
 import CardSection from "../CardSection";
 import Modal from "../Modal";
 import DepositDialog from "../DepositDialog";
+import { RefreshIcon } from "../icons";
 import { formatDateTime, shortAddress } from "../utils";
-
-function RefreshIcon({ size = 16 }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M23 4v6h-6" />
-      <path d="M1 20v-6h6" />
-      <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" />
-    </svg>
-  );
-}
 
 export default function RechargeView({
   account,
@@ -56,12 +37,12 @@ export default function RechargeView({
       <CardSection title="Account Balance">
         {account ? (
           <div className="balance-panel">
-            <span>Deposit Balance</span>
-            <strong>{account.deposit_balance} USDC</strong>
-            <span>Unpaid Invoices</span>
-            <strong>{account.unpaid_invoice_total} USDC</strong>
-            <span>Status</span>
-            <strong>{account.status}</strong>
+            <span className="balance-label">Deposit Balance</span>
+            <span className="balance-value">{account.deposit_balance} USDC</span>
+            <span className="balance-label">Unpaid Invoices</span>
+            <span className="balance-value">{account.unpaid_invoice_total} USDC</span>
+            <span className="balance-label">Status</span>
+            <span className="balance-value">{account.status}</span>
           </div>
         ) : (
           <p className="muted">Loading account...</p>
@@ -92,9 +73,9 @@ export default function RechargeView({
         {identity?.owner ? (
           <>
             <div className="balance-panel">
-              <span>Endpoint</span>
+              <span className="balance-label">Endpoint</span>
               <div className="endpoint-row">
-                <strong className="mono">{identity?.autopay_url || "—"}</strong>
+                <span className="balance-value mono">{identity?.autopay_url || "—"}</span>
                 <div className="endpoint-actions">
                   <a
                     href={identity?.autopay_url}
@@ -123,22 +104,22 @@ export default function RechargeView({
                   </button>
                 </div>
               </div>
-              <span>Address</span>
-              <strong className="mono">
+              <span className="balance-label">Address</span>
+              <span className="balance-value mono">
                 {autopayWalletBalance?.address
                   ? shortAddress(autopayWalletBalance.address)
                   : autopayWalletBalanceError
                   ? "Unavailable"
                   : "Loading..."}
-              </strong>
-              <span>Balance</span>
-              <strong>
+              </span>
+              <span className="balance-label">Balance</span>
+              <span className="balance-value">
                 {autopayWalletBalanceError
                   ? "Unavailable"
                   : autopayWalletBalance
                   ? `${autopayWalletBalance.balance} ${autopayWalletBalance.symbol}`
                   : "Loading..."}
-              </strong>
+              </span>
             </div>
             {autopayWalletBalanceError && <p className="form-error">{autopayWalletBalanceError}</p>}
           </>

@@ -600,6 +600,18 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
     }
   }, [activeView, identity?.owner]);
 
+  useEffect(() => {
+    if (activeView === "keys" && identity?.owner) {
+      loadApiKeys();
+    }
+  }, [activeView, identity?.owner]);
+
+  useEffect(() => {
+    if (activeView === "usage" && identity?.owner) {
+      loadRequests().then(loadInvoices);
+    }
+  }, [activeView, identity?.owner]);
+
   function show(value) {
     setOutput(typeof value === "string" ? value : JSON.stringify(value, null, 2));
   }
@@ -1196,11 +1208,10 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
 
         {activeView === "usage" && (
           <UsageView
-            account={account}
             requests={requests}
             lastInvoices={lastInvoices}
             isBusy={isBusy}
-            loadAccount={loadAccount}
+            busy={busy}
             loadRequests={loadRequests}
             loadInvoices={loadInvoices}
             autopayInvoice={autopayInvoice}

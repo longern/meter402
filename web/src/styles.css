@@ -1139,13 +1139,18 @@ textarea {
   padding: 4px 0;
 }
 
-.balance-panel span {
+.balance-panel .balance-label {
   color: #64748b;
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 400;
 }
 
-.balance-panel strong {
+.balance-panel .balance-value,
+.balance-panel > :not(.balance-label) {
+  font-size: 0.875rem;
+}
+
+.balance-panel .balance-value {
   min-width: 0;
   overflow-wrap: anywhere;
 }

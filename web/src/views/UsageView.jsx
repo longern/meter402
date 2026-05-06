@@ -1,35 +1,32 @@
 import CardSection from "../CardSection";
-import { formatDateTime, shortId } from "../utils";
+import { RefreshIcon } from "../icons";
+import { shortId } from "../utils";
 
 export default function UsageView({
-  account,
   requests,
   lastInvoices,
   isBusy,
-  loadAccount,
+  busy,
   loadRequests,
   loadInvoices,
   autopayInvoice,
 }) {
   return (
     <>
-      <CardSection title="Account">
-        <div className="row">
-          <button className="primary" disabled={isBusy} onClick={loadAccount}>Load account</button>
-          <button disabled={isBusy} className="primary" onClick={loadRequests}>Load calls</button>
-          <button disabled={isBusy} className="primary" onClick={loadInvoices}>Load invoices</button>
-          <button disabled={isBusy} className="primary" onClick={autopayInvoice}>Pay invoice</button>
-        </div>
-        {account && (
-          <dl className="summary-grid">
-            <dt>Balance</dt><dd>{account.deposit_balance}</dd>
-            <dt>Unpaid</dt><dd>{account.unpaid_invoice_total}</dd>
-            <dt>Status</dt><dd>{account.status}</dd>
-          </dl>
-        )}
-      </CardSection>
-
-      <CardSection title="Model Calls">
+      <CardSection
+        title="Model Calls"
+        actions={
+          <button
+            className="icon-button plain"
+            type="button"
+            aria-label="Refresh model calls"
+            disabled={busy === "loadRequests"}
+            onClick={loadRequests}
+          >
+            <RefreshIcon />
+          </button>
+        }
+      >
         {requests.length ? (
           <div className="data-list">
             {requests.map((item) => (
@@ -43,11 +40,27 @@ export default function UsageView({
             ))}
           </div>
         ) : (
-          <p className="muted">Load calls to see recent metered gateway requests.</p>
+          <p className="muted">No metered gateway requests yet.</p>
         )}
       </CardSection>
 
-      <CardSection title="Invoices">
+      <CardSection
+        title="Invoices"
+        actions={
+          <button
+            className="icon-button plain"
+            type="button"
+            aria-label="Refresh invoices"
+            disabled={busy === "loadInvoices"}
+            onClick={loadInvoices}
+          >
+            <RefreshIcon />
+          </button>
+        }
+      >
+        <div className="row" style={{ marginBottom: 12 }}>
+          <button disabled={isBusy} className="primary" onClick={autopayInvoice}>Pay invoice</button>
+        </div>
         {lastInvoices.length ? (
           <div className="data-list">
             {lastInvoices.map((item) => (
@@ -60,7 +73,7 @@ export default function UsageView({
             ))}
           </div>
         ) : (
-          <p className="muted">Load invoices to see unpaid usage charges.</p>
+          <p className="muted">No unpaid usage charges yet.</p>
         )}
       </CardSection>
     </>
