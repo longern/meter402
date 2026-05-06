@@ -1,9 +1,11 @@
 export type Env = {
   DB: D1Database;
   CLOUDFLARE_ACCOUNT_ID?: string;
+  CLOUDFLARE_API_TOKEN?: string;
   AI_GATEWAY_ID?: string;
   AI_GATEWAY_API_KEY?: string;
   AI_GATEWAY_AUTH_TOKEN?: string;
+  PRICE_TABLE_JSON?: string;
   X402_FACILITATOR_URL?: string;
   X402_FACILITATOR_AUTH_TOKEN?: string;
   X402_RECIPIENT_ADDRESS?: string;

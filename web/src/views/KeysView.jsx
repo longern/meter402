@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import CardSection from "../CardSection";
 import Modal from "../Modal";
 import { formatDateTime } from "../utils";
+import { GATEWAY_PROVIDERS, providerUrl } from "../gatewayProviders";
 
 function CopyIcon({ copied }) {
   if (copied) {
@@ -40,9 +41,8 @@ export default function KeysView({
   formatCompactNumber,
   formatMoneyCompact,
 }) {
-  const [baseUrlCopied, setBaseUrlCopied] = useState(false);
+  const [copiedBaseUrl, setCopiedBaseUrl] = useState("");
   const baseUrlCopyTimerRef = useRef(null);
-  const openAiBaseUrl = typeof window === "undefined" ? "/v1" : `${window.location.origin}/v1`;
 
   useEffect(() => {
     return () => {
@@ -52,15 +52,15 @@ export default function KeysView({
     };
   }, []);
 
-  async function copyOpenAiBaseUrl() {
+  async function copyBaseUrl(url) {
     try {
-      await navigator.clipboard.writeText(openAiBaseUrl);
-      setBaseUrlCopied(true);
+      await navigator.clipboard.writeText(url);
+      setCopiedBaseUrl(url);
       if (baseUrlCopyTimerRef.current) {
         window.clearTimeout(baseUrlCopyTimerRef.current);
       }
       baseUrlCopyTimerRef.current = window.setTimeout(() => {
-        setBaseUrlCopied(false);
+        setCopiedBaseUrl("");
         baseUrlCopyTimerRef.current = null;
       }, 1400);
     } catch (error) {
@@ -71,21 +71,29 @@ export default function KeysView({
   return (
     <>
       <CardSection title="Base URL">
-        <p className="muted">Use this as the OpenAI SDK baseURL.</p>
-        <div className="approval-link-box">
-          <div className="approval-link-header">
-            <span>OpenAI base URL</span>
-            <button
-              className={`approval-copy-button${baseUrlCopied ? " copied" : ""}`}
-              type="button"
-              onClick={copyOpenAiBaseUrl}
-              aria-label={baseUrlCopied ? "Base URL copied" : "Copy base URL"}
-              title={baseUrlCopied ? "Copied" : "Copy base URL"}
-            >
-              <CopyIcon copied={baseUrlCopied} />
-            </button>
-          </div>
-          <code>{openAiBaseUrl}</code>
+        <p className="muted">Use the path that matches the upstream provider SDK.</p>
+        <div className="endpoint-list">
+          {GATEWAY_PROVIDERS.map((provider) => {
+            const url = providerUrl(provider.path);
+            const copied = copiedBaseUrl === url;
+            return (
+              <div className="approval-link-box" key={provider.path}>
+                <div className="approval-link-header">
+                  <span>{provider.label} · {provider.sdk}</span>
+                  <button
+                    className={`approval-copy-button${copied ? " copied" : ""}`}
+                    type="button"
+                    onClick={() => copyBaseUrl(url)}
+                    aria-label={copied ? "Base URL copied" : `Copy ${provider.label} base URL`}
+                    title={copied ? "Copied" : "Copy base URL"}
+                  >
+                    <CopyIcon copied={copied} />
+                  </button>
+                </div>
+                <code>{url}</code>
+              </div>
+            );
+          })}
         </div>
       </CardSection>
 

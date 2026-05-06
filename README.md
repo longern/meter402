@@ -5,10 +5,10 @@
 The intended flow is:
 
 ```text
-Client / OpenAI SDK
+Client / provider SDK
   -> /v1/chat/completions
   -> Meteria402 account and invoice checks
-  -> Cloudflare AI Gateway Unified API
+  -> Cloudflare AI Gateway provider endpoint
   -> usage-based invoice creation
   -> x402 invoice payment before the next request
 ```
@@ -20,7 +20,7 @@ This implementation includes:
 - Anonymous deposit quote and settlement endpoints.
 - API key generation after a settled deposit.
 - D1-backed accounts, API keys, requests, invoices, payments, and append-only ledger entries.
-- OpenAI-compatible `/v1/chat/completions` proxying through Cloudflare AI Gateway.
+- Provider SDK endpoint proxying through Cloudflare AI Gateway.
 - Usage-based invoice creation after successful requests.
 - Blocking of new model requests when an unpaid invoice exists.
 - Optional payment-worker integration for deposit and invoice settlement.
@@ -88,10 +88,14 @@ Set required secrets:
 
 ```bash
 wrangler secret put CLOUDFLARE_ACCOUNT_ID
+wrangler secret put CLOUDFLARE_API_TOKEN
 wrangler secret put AI_GATEWAY_API_KEY
 wrangler secret put X402_RECIPIENT_ADDRESS
 wrangler secret put APP_SIGNING_SECRET
 ```
+
+`CLOUDFLARE_API_TOKEN` is used only for AI Gateway log reconciliation and needs
+Cloudflare AI Gateway read access for the configured account/gateway.
 
 For a gateway that requires Cloudflare AI Gateway authentication, also set:
 
@@ -177,8 +181,10 @@ Do not enable development payments in production.
 
 ### Gateway
 
-- `POST /v1/*` — OpenAI-compatible endpoints. Proxied through Cloudflare AI Gateway. Usage is metered and invoiced.
-- `GET /v1/models` and `GET /v1/models/:id` — OpenAI-compatible model metadata endpoints. Proxied without creating usage invoices.
+- `POST /v1/*` — OpenAI native endpoints. Proxied to Cloudflare AI Gateway `/openai/*`.
+- `POST /compat/*` — Cloudflare unified OpenAI-compatible endpoints. Proxied to AI Gateway `/compat/*`.
+- `POST /anthropic/*`, `/google-ai-studio/*`, `/openrouter/*`, `/mistral/*`, `/groq/*`, `/deepseek/*`, `/perplexity/*`, `/grok/*`, `/workers-ai/*`, `/azure-openai/*`, `/cohere/*`, `/replicate/*`, and `/huggingface/*` — provider-native Gateway endpoints.
+- `GET` requests under these provider paths are proxied without creating usage invoices.
 - `GET /health` — Service health check.
 - `GET /api/config` — Public frontend configuration (min deposit, asset decimals, etc.).
 
@@ -193,6 +199,20 @@ const client = new OpenAI({
 });
 
 const response = await client.chat.completions.create({
+  model: "gpt-5-mini",
+  messages: [{ role: "user", content: "Hello" }],
+});
+```
+
+For the Cloudflare unified OpenAI-compatible endpoint, use:
+
+```ts
+const client = new OpenAI({
+  apiKey: "meteria402_xxx",
+  baseURL: "https://your-worker.example.com/compat",
+});
+
+await client.chat.completions.create({
   model: "openai/gpt-5-mini",
   messages: [{ role: "user", content: "Hello" }],
 });
@@ -214,5 +234,6 @@ If the previous request created an unpaid invoice, the next model request return
 
 - API keys are shown only once.
 - Account recovery is not implemented. If the API key is lost, the anonymous account cannot be recovered yet.
-- Streaming requests ask the upstream for `stream_options.include_usage = true`. If usage is still missing, the request is marked `pending_reconcile`.
-- AI Gateway log reconciliation is planned but not implemented in this MVP.
+- Streaming requests ask the upstream for `stream_options.include_usage = true`.
+- Successful metered requests are marked `pending_reconcile` first. Billing is delayed until the Worker can read the Cloudflare AI Gateway log cost, then the request is settled and an invoice is created.
+- AI Gateway log reconciliation runs shortly after the response with `waitUntil` retries and is swept again by the scheduled Worker trigger.

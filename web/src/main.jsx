@@ -6,6 +6,7 @@ import RechargeView from "./views/RechargeView";
 import KeysView from "./views/KeysView";
 import UsageView from "./views/UsageView";
 import AutopayView from "./views/AutopayView";
+import { GATEWAY_PROVIDERS } from "./gatewayProviders";
 import {
   readableError,
   shortAddress,
@@ -67,14 +68,14 @@ function HomePage() {
             </p>
             <div className="hero-actions">
               <a className="button-link primary" href="/console">Open console</a>
-              <a className="button-link secondary" href="/v1/chat/completions">API endpoint</a>
+              <a className="button-link secondary" href="/compat/chat/completions">Compat endpoint</a>
             </div>
           </div>
 
           <div className="flow-panel" aria-label="Meteria402 request flow">
             <div className="flow-row">
               <span>Client</span>
-              <strong>/v1/chat/completions</strong>
+              <strong>/v1 or /compat</strong>
             </div>
             <div className="flow-line" />
             <div className="flow-row">
@@ -123,12 +124,24 @@ function HomePage() {
         <section className="home-section split">
           <div>
             <h2>Gateway Endpoint</h2>
-            <p>Point the OpenAI SDK at the Worker and keep your existing chat completions integration.</p>
+            <p>Point each provider SDK at the matching Meteria402 path.</p>
           </div>
           <pre className="code-sample">{`const client = new OpenAI({
   apiKey: "meteria402_xxx",
   baseURL: "https://your-worker.example.com/v1",
 });`}</pre>
+        </section>
+
+        <section className="home-section">
+          <h2>Provider Paths</h2>
+          <div className="provider-path-grid">
+            {GATEWAY_PROVIDERS.slice(0, 10).map((provider) => (
+              <article key={provider.path}>
+                <strong>{provider.path}</strong>
+                <span>{provider.label}</span>
+              </article>
+            ))}
+          </div>
         </section>
       </main>
     </div>

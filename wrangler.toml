@@ -33,6 +33,7 @@ ALLOW_DEV_PAYMENTS = "false"
 
 # Set secrets with wrangler:
 # wrangler secret put CLOUDFLARE_ACCOUNT_ID
+# wrangler secret put CLOUDFLARE_API_TOKEN
 # wrangler secret put AI_GATEWAY_API_KEY
 # wrangler secret put AI_GATEWAY_AUTH_TOKEN
 # wrangler secret put X402_RECIPIENT_ADDRESS
