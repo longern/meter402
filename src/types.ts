@@ -1,5 +1,13 @@
 export type Env = {
   DB: D1Database;
+  AI?: {
+    aiGatewayLogId?: string;
+    run(
+      model: string,
+      input: Record<string, unknown>,
+      options?: Record<string, unknown>,
+    ): Promise<unknown>;
+  };
   CLOUDFLARE_ACCOUNT_ID?: string;
   CLOUDFLARE_API_TOKEN?: string;
   AI_GATEWAY_ID?: string;
