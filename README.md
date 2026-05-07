@@ -32,7 +32,7 @@ This version intentionally keeps Durable Objects out of the MVP. D1 is the sourc
 
 - `/` — Home page with gateway overview.
 - `/console` — Account dashboard for deposits, API keys, usage, invoices, and autopay.
-- `/login` — Owner-wallet login via an autopay endpoint.
+- `/login` — Owner-wallet login on the main site, with injected-wallet signing or scan login.
 - `/pay-deposit` — Standalone deposit payment page for wallets that do not expose `window.ethereum` (mobile / non-ETH browsers). Deep-link or QR-code based.
 
 ## x402 defaults
@@ -91,7 +91,7 @@ wrangler secret put CLOUDFLARE_ACCOUNT_ID
 wrangler secret put CLOUDFLARE_API_TOKEN
 wrangler secret put AI_GATEWAY_API_KEY
 wrangler secret put X402_RECIPIENT_ADDRESS
-wrangler secret put APP_SIGNING_SECRET
+wrangler secret put X402_RECIPIENT_PRIVATE_KEY
 ```
 
 `CLOUDFLARE_API_TOKEN` is used only for AI Gateway log reconciliation and needs
@@ -108,6 +108,16 @@ To prefill `/console` with a default payment worker URL at frontend build time, 
 ```bash
 export VITE_DEFAULT_AUTOPAY_URL="https://autopay.example.com"
 ```
+
+For autopay pre-authorizations, the main Worker signs each `/api/pay` request
+with an EIP-712 requester wallet proof. `X402_RECIPIENT_PRIVATE_KEY` must match
+`X402_RECIPIENT_ADDRESS`; it identifies the main site's recipient/refund wallet
+and is not the user's owner wallet or the autopay payer hot wallet. Set
+`AUTOPAY_REQUESTER_ORIGIN` when background jobs need to use stored autopay
+capabilities outside an incoming request, and optionally set
+`AUTOPAY_REQUESTER_NAME` for the label shown on the autopay authorization page.
+The same recipient private key is also used to derive the HMAC key for login,
+session, quote, and autopay state tokens.
 
 Run locally:
 
@@ -144,8 +154,13 @@ Do not enable development payments in production.
 ### Authentication
 
 - `GET /api/session` — Returns the current session identity (owner address, autopay URL, expiry) or `null`.
-- `POST /api/login/autopay/start` — Initiates an owner-wallet login via an autopay endpoint.
-- `POST /api/login/autopay/complete` — Completes a login after wallet approval.
+- `POST /api/login/challenge` — Creates a short-lived main-site wallet login challenge.
+- `POST /api/login/complete` — Verifies the wallet signature and sets the session cookie.
+- `POST /api/login/scan/start` — Creates a QR/deeplink login request backed by a Durable Object.
+- `GET /api/login/scan/:id/events` — Hibernatable WebSocket stream for scan-login status.
+- `POST /api/login/scan/:id/challenge` — Creates the wallet-page challenge for a scan login.
+- `POST /api/login/scan/:id/approve` — Verifies the wallet-page signature and approves the scan login.
+- `POST /api/login/scan/:id/complete` — Completes the desktop browser login after approval.
 - `POST /api/logout` — Clears the session cookie.
 - `POST /api/session/autopay` — Updates the autopay endpoint stored in the session.
 

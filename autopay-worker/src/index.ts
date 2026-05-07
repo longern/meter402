@@ -2,7 +2,7 @@ import { x402Client, x402HTTPClient } from "@x402/core/client";
 import type { Network, PaymentRequired, PaymentRequirements } from "@x402/core/types";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { SiweMessage } from "siwe";
-import { getAddress, verifyMessage, type Address, type Hex } from "viem";
+import { getAddress, verifyMessage, verifyTypedData, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
 type Env = {
@@ -19,6 +19,7 @@ type PayerWallet = {
 };
 
 type AutopayCapability = {
+  requester?: RequesterBinding;
   allowedOrigins: string[];
   allowedPayTo: Address[];
   network: Network;
@@ -26,6 +27,20 @@ type AutopayCapability = {
   maxSingleAmount: string;
   totalBudget: string;
   validBefore: string;
+};
+
+type RequesterBinding = {
+  name?: string;
+  origin: string;
+  account: string;
+};
+
+type RequesterProof = {
+  account: string;
+  nonce: string;
+  issuedAt: number;
+  expiresAt: number;
+  signature: Hex;
 };
 
 type AuthorizationInput = {
@@ -69,7 +84,7 @@ const JSON_HEADERS = {
 const CORS_HEADERS = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET,POST,OPTIONS",
-  "access-control-allow-headers": "authorization,content-type,x-autopay-poll-token",
+  "access-control-allow-headers": "authorization,content-type,x-autopay-poll-token,x-requester-account,x-requester-nonce,x-requester-issued-at,x-requester-expires-at,x-requester-signature,x-requester-origin",
   "access-control-expose-headers": "x-payment-response",
 };
 
@@ -80,6 +95,19 @@ const LOGIN_PREFIX = "urn:meteria402:login:";
 const DEFAULT_AUTH_TTL_SECONDS = 5 * 60;
 const MAX_AUTH_TTL_SECONDS = 30 * 60;
 const DEFAULT_NETWORK = "eip155:8453" as Network;
+const REQUESTER_PROOF_DOMAIN_NAME = "Meteria402 Autopay Requester";
+const REQUESTER_PROOF_VERSION = "1";
+const REQUESTER_PROOF_TYPES = {
+  AutopayPaymentRequest: [
+    { name: "worker", type: "string" },
+    { name: "path", type: "string" },
+    { name: "bodyHash", type: "bytes32" },
+    { name: "capabilityHash", type: "bytes32" },
+    { name: "nonce", type: "string" },
+    { name: "issuedAt", type: "uint256" },
+    { name: "expiresAt", type: "uint256" },
+  ],
+} as const;
 
 export class AutopayAuthSession implements DurableObject {
   constructor(
@@ -155,14 +183,6 @@ export class AutopayAuthSession implements DurableObject {
         record.status = "denied";
         await this.ctx.storage.put("record", record);
         this.broadcastEvent(record);
-        // ─── Audit log: update denied ───
-        try {
-          await this.env.DB.prepare(
-            `UPDATE autopay_authorizations SET status = 'denied' WHERE request_id = ?`
-          ).bind(record.requestId).run();
-        } catch (err) {
-          console.error("Failed to update autopay_authorizations denied", err);
-        }
         return jsonResponse({ status: record.status });
       }
 
@@ -204,17 +224,32 @@ export class AutopayAuthSession implements DurableObject {
         await this.ctx.storage.put("record", record);
         this.broadcastEvent(record);
 
-        // ─── Audit log: update approved ───
         let capabilityHash: string | null = null;
         if (authorization.capability) {
           capabilityHash = await hashCapability(authorization.capability);
         }
         try {
           await this.env.DB.prepare(
-            `UPDATE autopay_authorizations SET status = 'approved', owner = ?, approved_at = ?, capability_hash = ? WHERE request_id = ?`
-          ).bind(record.owner, record.approvedAt, capabilityHash, record.requestId).run();
+            `INSERT INTO autopay_authorizations
+             (id, request_id, kind, owner, worker_origin, policy_network, policy_asset, policy_max_single_amount, policy_valid_before, status, created_at, approved_at, expires_at, capability_hash)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', ?, ?, ?, ?)`
+          ).bind(
+            record.requestId,
+            record.requestId,
+            record.kind,
+            record.owner,
+            record.workerOrigin,
+            record.policy?.network ?? null,
+            record.policy?.asset ?? null,
+            record.policy?.maxSingleAmount ?? null,
+            record.policy?.validBefore ?? null,
+            record.createdAt,
+            record.approvedAt,
+            record.expiresAt,
+            capabilityHash,
+          ).run();
         } catch (err) {
-          console.error("Failed to update autopay_authorizations approved", err);
+          console.error("Failed to insert autopay_authorizations approved", err);
         }
 
         // ─── Budget tracking: register capability budget ───
@@ -261,14 +296,6 @@ export class AutopayAuthSession implements DurableObject {
     const record = await this.ctx.storage.get<AuthRequestRecord>("record");
     if (record && record.status === "pending") {
       this.broadcastEvent(record, "expired");
-      // ─── Audit log: update expired ───
-      try {
-        await this.env.DB.prepare(
-          `UPDATE autopay_authorizations SET status = 'expired' WHERE request_id = ?`
-        ).bind(record.requestId).run();
-      } catch (err) {
-        console.error("Failed to update autopay_authorizations expired", err);
-      }
     }
     await this.ctx.storage.deleteAll();
   }
@@ -410,9 +437,10 @@ async function handleCreateAuthRequest(request: Request, env: Env): Promise<Resp
   const now = new Date();
   const expiresAt = new Date(now.getTime() + ttlSeconds * 1000);
   const policyValidBefore = normalizeValidBefore(body.policyValidBefore ?? body.policy_valid_before ?? body.validBefore ?? body.valid_before, expiresAt);
+  const requester = kind === "payment" ? normalizeRequester(body.requester) : undefined;
 
   const policy = kind === "payment"
-    ? normalizeCapability(body.policy ?? inferPolicyFromPaymentRequirement(env, paymentRequired, policyValidBefore), policyValidBefore)
+    ? normalizeCapability(body.policy ?? inferPolicyFromPaymentRequirement(env, paymentRequired, policyValidBefore), policyValidBefore, requester)
     : undefined;
   if (kind === "payment" && paymentRequirementHash) {
     if (!policy) {
@@ -443,29 +471,6 @@ async function handleCreateAuthRequest(request: Request, env: Env): Promise<Resp
     headers: JSON_HEADERS,
     body: JSON.stringify(record),
   });
-
-  // ─── Audit log: insert pending authorization ───
-  try {
-    await env.DB.prepare(
-      `INSERT INTO autopay_authorizations (id, request_id, kind, owner, worker_origin, policy_network, policy_asset, policy_max_single_amount, policy_valid_before, status, created_at, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(
-      requestId,
-      requestId,
-      kind,
-      null,
-      publicOrigin,
-      policy?.network ?? null,
-      policy?.asset ?? null,
-      policy?.maxSingleAmount ?? null,
-      policy?.validBefore ?? null,
-      "pending",
-      now.toISOString(),
-      expiresAt.toISOString()
-    ).run();
-  } catch (err) {
-    console.error("Failed to insert autopay_authorizations", err);
-  }
 
   const verification = new URL("/authorize", publicOrigin);
   verification.searchParams.set("request_id", requestId);
@@ -517,7 +522,8 @@ function sessionStub(env: Env, requestId: string): DurableObjectStub {
 }
 
 async function handlePay(request: Request, env: Env): Promise<Response> {
-  const body = await readJsonObject(request);
+  const bodyText = await request.text();
+  const body = parseJsonObject(bodyText);
   const paymentRequired = normalizePaymentRequired(body.paymentRequired ?? body.payment_required ?? body);
   const authorization = await verifyAuthorization(request, env, body);
 
@@ -527,6 +533,7 @@ async function handlePay(request: Request, env: Env): Promise<Response> {
 
   const capabilityHash = await hashCapability(authorization.capability);
   const selectedRequirement = selectRequirement(paymentRequired, authorization.capability);
+  const requesterProof = await verifyRequesterProof(request, authorization.capability, bodyText, capabilityHash);
 
   // ─── Budget check: atomic spent_amount + amount <= total_budget ───
   const budgetRow = await env.DB.prepare(
@@ -543,18 +550,6 @@ async function handlePay(request: Request, env: Env): Promise<Response> {
     throw new HttpError(402, "budget_exceeded", "This payment would exceed the autopay capability total budget.");
   }
 
-  const { headers, paymentPayload } = await createPayment(env, paymentRequired, authorization, selectedRequirement);
-
-  // ─── Atomic budget deduction ───
-  const updateResult = await env.DB.prepare(
-    `UPDATE autopay_capability_budgets SET spent_amount = ? WHERE capability_hash = ? AND spent_amount = ?`
-  ).bind(newSpent.toString(), capabilityHash, budgetRow.spent_amount).run();
-
-  if (updateResult.meta.changes === 0) {
-    throw new HttpError(409, "budget_race", "Capability budget was modified concurrently. Please retry.");
-  }
-
-  // ─── Audit log: insert payment ───
   const paymentId = crypto.randomUUID();
   const resourceUrl = paymentRequired.resource?.url ?? "";
   const amountDecimal = (() => {
@@ -565,27 +560,26 @@ async function handlePay(request: Request, env: Env): Promise<Response> {
       return null;
     }
   })();
-  try {
-    await env.DB.prepare(
-      `INSERT INTO autopay_payments (id, authorization_id, capability_hash, owner, network, asset, pay_to, amount, amount_decimal, currency, resource_url, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(
-      paymentId,
-      authorization.authRequestId ?? null,
-      capabilityHash,
-      authorization.owner,
-      selectedRequirement.network,
-      selectedRequirement.asset,
-      selectedRequirement.payTo,
-      selectedRequirement.amount,
-      amountDecimal,
-      "USD",
-      resourceUrl,
-      "created",
-      new Date().toISOString()
-    ).run();
-  } catch (err) {
-    console.error("Failed to insert autopay_payments", err);
+  await insertPaymentAudit(env, {
+    paymentId,
+    authorizationId: authorization.authRequestId ?? null,
+    capabilityHash,
+    owner: authorization.owner,
+    selectedRequirement,
+    amountDecimal,
+    resourceUrl,
+    requesterProof,
+  });
+
+  const { headers, paymentPayload } = await createPayment(env, paymentRequired, authorization, selectedRequirement);
+
+  // ─── Atomic budget deduction ───
+  const updateResult = await env.DB.prepare(
+    `UPDATE autopay_capability_budgets SET spent_amount = ? WHERE capability_hash = ? AND spent_amount = ?`
+  ).bind(newSpent.toString(), capabilityHash, budgetRow.spent_amount).run();
+
+  if (updateResult.meta.changes === 0) {
+    throw new HttpError(409, "budget_race", "Capability budget was modified concurrently. Please retry.");
   }
 
   return jsonResponse({
@@ -599,8 +593,13 @@ async function handlePay(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleProxy(request: Request, env: Env): Promise<Response> {
-  const body = await readJsonObject(request) as ProxyBody;
+  const bodyText = await request.text();
+  const body = parseJsonObject(bodyText) as ProxyBody;
   const authorization = await verifyAuthorization(request, env, body);
+  const capabilityHash = authorization.capability ? await hashCapability(authorization.capability) : "";
+  const requesterProof = authorization.capability
+    ? await verifyRequesterProof(request, authorization.capability, bodyText, capabilityHash)
+    : undefined;
   const targetUrl = requireString(body.url, "url");
   const method = typeof body.method === "string" ? body.method : "GET";
   const headers = normalizeProxyHeaders(body.headers);
@@ -617,7 +616,20 @@ async function handleProxy(request: Request, env: Env): Promise<Response> {
   }
 
   const paymentRequired = await parsePaymentRequiredResponse(first);
-  const payment = await createPayment(env, paymentRequired, authorization);
+  const selectedRequirement = authorization.capability ? selectRequirement(paymentRequired, authorization.capability) : undefined;
+  if (authorization.capability && selectedRequirement && requesterProof) {
+    await insertPaymentAudit(env, {
+      paymentId: crypto.randomUUID(),
+      authorizationId: authorization.authRequestId ?? null,
+      capabilityHash,
+      owner: authorization.owner,
+      selectedRequirement,
+      amountDecimal: null,
+      resourceUrl: paymentRequired.resource?.url ?? targetUrl,
+      requesterProof,
+    });
+  }
+  const payment = await createPayment(env, paymentRequired, authorization, selectedRequirement);
   const retryHeaders = new Headers(headers);
   for (const [key, value] of Object.entries(payment.headers)) {
     retryHeaders.set(key, value);
@@ -787,13 +799,15 @@ function extractOptionalCapability(siwe: SiweMessage): AutopayCapability | undef
     : undefined;
 }
 
-function normalizeCapability(value: unknown, defaultValidBefore?: string): AutopayCapability {
+function normalizeCapability(value: unknown, defaultValidBefore?: string, requester?: RequesterBinding): AutopayCapability {
   if (!value || typeof value !== "object") {
     throw new HttpError(400, "invalid_autopay_capability", "Autopay capability must be a JSON object.");
   }
   const input = value as Partial<AutopayCapability>;
   const validBefore = normalizeValidBefore(input.validBefore, defaultValidBefore ? new Date(defaultValidBefore) : undefined);
+  const requesterBinding = requester ?? (input.requester ? normalizeRequester(input.requester) : undefined);
   return {
+    ...(requesterBinding ? { requester: requesterBinding } : {}),
     allowedOrigins: requireStringArray(input.allowedOrigins, "allowedOrigins").map((origin) => new URL(origin).origin),
     allowedPayTo: requireStringArray(input.allowedPayTo, "allowedPayTo").map((address) => getAddress(address)),
     network: requireString(input.network, "network") as Network,
@@ -804,9 +818,33 @@ function normalizeCapability(value: unknown, defaultValidBefore?: string): Autop
   };
 }
 
+function normalizeRequester(value: unknown): RequesterBinding {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new HttpError(400, "missing_requester", "Payment authorization requires requester wallet metadata.");
+  }
+  const input = value as Partial<RequesterBinding> & { client_id?: unknown };
+  const origin = new URL(requireString(input.origin, "requester.origin")).origin;
+  const account = requireString(input.account, "requester.account");
+  parseRequesterAccount(account);
+  return {
+    name: typeof input.name === "string" && input.name.trim() ? input.name.trim().slice(0, 80) : undefined,
+    origin,
+    account,
+  };
+}
+
+function canonicalRequester(requester: RequesterBinding): Record<string, unknown> {
+  return {
+    name: requester.name,
+    origin: requester.origin,
+    account: requester.account,
+  };
+}
+
 /** Compute a canonical SHA-256 hash of an AutopayCapability. */
 async function hashCapability(capability: AutopayCapability): Promise<string> {
-  const canonical = JSON.stringify({
+  const canonical = canonicalJson({
+    requester: capability.requester ? canonicalRequester(capability.requester) : undefined,
     allowedOrigins: capability.allowedOrigins.slice().sort(),
     allowedPayTo: capability.allowedPayTo.map(normalizeAddress).sort(),
     network: capability.network,
@@ -821,6 +859,139 @@ async function hashCapability(capability: AutopayCapability): Promise<string> {
   return Array.from(new Uint8Array(digest))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
+}
+
+async function verifyRequesterProof(
+  request: Request,
+  capability: AutopayCapability,
+  bodyText: string,
+  capabilityHash: string,
+): Promise<RequesterProof> {
+  if (!capability.requester) {
+    throw new HttpError(403, "missing_requester", "Autopay capability is not bound to a requester wallet.");
+  }
+  const requester = capability.requester;
+  const accountHeader = requireHeader(request, "x-requester-account");
+  if (accountHeader !== requester.account) {
+    throw new HttpError(403, "requester_mismatch", "Requester account does not match the autopay capability.");
+  }
+  const originHeader = request.headers.get("x-requester-origin");
+  if (originHeader && new URL(originHeader).origin !== requester.origin) {
+    throw new HttpError(403, "requester_origin_mismatch", "Requester origin does not match the autopay capability.");
+  }
+
+  const { network, address } = parseRequesterAccount(requester.account);
+  const issuedAt = requireUintHeader(request, "x-requester-issued-at");
+  const expiresAt = requireUintHeader(request, "x-requester-expires-at");
+  const now = Math.floor(Date.now() / 1000);
+  if (issuedAt > now + 60) {
+    throw new HttpError(403, "requester_proof_not_yet_valid", "Requester proof issuedAt is in the future.");
+  }
+  if (expiresAt <= now) {
+    throw new HttpError(403, "requester_proof_expired", "Requester proof has expired.");
+  }
+  if (expiresAt - issuedAt > 300) {
+    throw new HttpError(403, "requester_proof_ttl_too_long", "Requester proof expiration is too far in the future.");
+  }
+
+  const url = new URL(request.url);
+  const nonce = requireHeader(request, "x-requester-nonce");
+  const valid = await verifyTypedData({
+    address,
+    domain: {
+      name: REQUESTER_PROOF_DOMAIN_NAME,
+      version: REQUESTER_PROOF_VERSION,
+      chainId: chainIdFromNetwork(network as Network),
+    },
+    types: REQUESTER_PROOF_TYPES,
+    primaryType: "AutopayPaymentRequest",
+    message: {
+      worker: url.origin,
+      path: url.pathname,
+      bodyHash: `0x${await sha256Hex(bodyText)}` as Hex,
+      capabilityHash: `0x${capabilityHash}` as Hex,
+      nonce,
+      issuedAt: BigInt(issuedAt),
+      expiresAt: BigInt(expiresAt),
+    },
+    signature: requireHeader(request, "x-requester-signature") as Hex,
+  });
+  if (!valid) {
+    throw new HttpError(403, "invalid_requester_signature", "Requester EIP-712 signature is invalid.");
+  }
+  return {
+    account: requester.account,
+    nonce,
+    issuedAt,
+    expiresAt,
+    signature: requireHeader(request, "x-requester-signature") as Hex,
+  };
+}
+
+async function insertPaymentAudit(
+  env: Env,
+  input: {
+    paymentId: string;
+    authorizationId: string | null;
+    capabilityHash: string;
+    owner: Address;
+    selectedRequirement: PaymentRequirements;
+    amountDecimal: string | null;
+    resourceUrl: string;
+    requesterProof: RequesterProof;
+  },
+): Promise<void> {
+  try {
+    await env.DB.prepare(
+      `INSERT INTO autopay_payments
+       (id, authorization_id, capability_hash, owner, network, asset, pay_to, amount, amount_decimal, currency, resource_url, requester_account, requester_nonce, requester_proof_expires_at, requester_signature, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      input.paymentId,
+      input.authorizationId,
+      input.capabilityHash,
+      input.owner,
+      input.selectedRequirement.network,
+      input.selectedRequirement.asset,
+      input.selectedRequirement.payTo,
+      input.selectedRequirement.amount,
+      input.amountDecimal,
+      paymentRequirementCurrency(input.selectedRequirement),
+      input.resourceUrl,
+      input.requesterProof.account,
+      input.requesterProof.nonce,
+      new Date(input.requesterProof.expiresAt * 1000).toISOString(),
+      input.requesterProof.signature,
+      "created",
+      new Date().toISOString(),
+    ).run();
+  } catch (err) {
+    console.error("Failed to insert autopay_payments", err);
+    throw new HttpError(409, "requester_proof_replayed", "Requester proof nonce has already been used.");
+  }
+}
+
+function paymentRequirementCurrency(requirement: PaymentRequirements): string {
+  const extraCurrency = (requirement as { extra?: Record<string, unknown> })
+    .extra?.currency;
+  if (typeof extraCurrency === "string" && extraCurrency.trim()) {
+    return extraCurrency.trim().toUpperCase();
+  }
+  if (
+    requirement.network === "eip155:8453" &&
+    requirement.asset.toLowerCase() ===
+      "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+  ) {
+    return "USDC";
+  }
+  if (
+    requirement.network === "eip155:8453" &&
+    requirement.asset.toLowerCase() ===
+      "0xfde4c96c8593536e31f229ea8f37b2adac255bb2"
+  ) {
+    return "USDT";
+  }
+  return "TOKEN";
 }
 
 function inferPolicyFromPaymentRequirement(env: Env, paymentRequired: PaymentRequired | undefined, validBefore: string): AutopayCapability {
@@ -945,8 +1116,14 @@ function sameCapability(a: AutopayCapability, b: AutopayCapability): boolean {
     && a.maxSingleAmount === b.maxSingleAmount
     && a.totalBudget === b.totalBudget
     && a.validBefore === b.validBefore
+    && sameRequester(a.requester, b.requester)
     && sameStringSet(a.allowedOrigins, b.allowedOrigins)
     && sameStringSet(a.allowedPayTo.map(normalizeAddress), b.allowedPayTo.map(normalizeAddress));
+}
+
+function sameRequester(a: RequesterBinding | undefined, b: RequesterBinding | undefined): boolean {
+  if (!a || !b) return a === b;
+  return a.origin === b.origin && a.account === b.account && (a.name ?? "") === (b.name ?? "");
 }
 
 function sameStringSet(a: string[], b: string[]): boolean {
@@ -1042,6 +1219,19 @@ function normalizeAddress(value: string): string {
   }
 }
 
+function parseRequesterAccount(account: string): { network: string; address: Address } {
+  const parts = account.split(":");
+  if (parts.length !== 3 || parts[0] !== "eip155") {
+    throw new HttpError(400, "invalid_requester_account", "requester.account must be a CAIP-10 EIP-155 account.");
+  }
+  const network = `${parts[0]}:${parts[1]}`;
+  chainIdFromNetwork(network as Network);
+  return {
+    network,
+    address: getAddress(parts[2]),
+  };
+}
+
 function chainIdFromNetwork(network: Network): number {
   const [namespace, reference] = network.split(":");
   if (namespace !== "eip155") {
@@ -1100,6 +1290,12 @@ async function hashJson(value: unknown): Promise<string> {
   return `0x${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
+async function sha256Hex(value: string): Promise<string> {
+  const bytes = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 function canonicalJson(value: unknown): string {
   if (value == null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
@@ -1112,6 +1308,19 @@ function canonicalJson(value: unknown): string {
 async function readJsonObject(request: Request): Promise<Record<string, unknown>> {
   try {
     const value = await request.json();
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new HttpError(400, "invalid_json", "Request body must be a JSON object.");
+    }
+    return value as Record<string, unknown>;
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    throw new HttpError(400, "invalid_json", "Request body must be valid JSON.");
+  }
+}
+
+function parseJsonObject(text: string): Record<string, unknown> {
+  try {
+    const value = JSON.parse(text);
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       throw new HttpError(400, "invalid_json", "Request body must be a JSON object.");
     }
@@ -1223,6 +1432,22 @@ function requireString(value: unknown, field: string): string {
     throw new HttpError(400, "missing_field", `${field} is required.`);
   }
   return value.trim();
+}
+
+function requireHeader(request: Request, name: string): string {
+  const value = request.headers.get(name);
+  if (!value || !value.trim()) {
+    throw new HttpError(403, "missing_requester_proof", `${name} header is required.`);
+  }
+  return value.trim();
+}
+
+function requireUintHeader(request: Request, name: string): number {
+  const value = Number(requireHeader(request, name));
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new HttpError(403, "invalid_requester_proof", `${name} must be a positive integer.`);
+  }
+  return value;
 }
 
 function requireStringArray(value: unknown, field: string): string[] {

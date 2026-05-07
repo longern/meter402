@@ -13,12 +13,20 @@ export type RouteHandlers = {
   handleGetConfig: (env: Env) => Response;
   handleAutopayWalletBalance: Handler;
   handleGetSession: Handler;
-  handleLoginAutopayStart: Handler;
-  handleLoginAutopayComplete: Handler;
+  handleLoginChallenge: Handler;
+  handleLoginComplete: Handler;
+  handleLoginScanStart: Handler;
+  handleLoginScanRequest: (
+    request: Request,
+    env: Env,
+    requestId: string,
+    action: string,
+  ) => Response | Promise<Response>;
   handleLogout: (request: Request) => Response;
   handleUpdateSessionAutopay: Handler;
   handleListDeposits: Handler;
   handleDepositQuote: Handler;
+  handleDepositIntent: Handler;
   handleDepositSettle: Handler;
   handleDepositAutopayStart: IdHandler;
   handleDepositAutopayComplete: IdHandler;
@@ -104,11 +112,24 @@ async function dispatchSessionRoute(
   if (method === "GET" && url.pathname === "/api/session") {
     return handlers.handleGetSession(request, env);
   }
-  if (method === "POST" && url.pathname === "/api/login/autopay/start") {
-    return handlers.handleLoginAutopayStart(request, env);
+  if (method === "POST" && url.pathname === "/api/login/challenge") {
+    return handlers.handleLoginChallenge(request, env);
   }
-  if (method === "POST" && url.pathname === "/api/login/autopay/complete") {
-    return handlers.handleLoginAutopayComplete(request, env);
+  if (method === "POST" && url.pathname === "/api/login/complete") {
+    return handlers.handleLoginComplete(request, env);
+  }
+  if (method === "POST" && url.pathname === "/api/login/scan/start") {
+    return handlers.handleLoginScanStart(request, env);
+  }
+  const scanLogin = matchPath(
+    url.pathname,
+    /^\/api\/login\/scan\/([^/]+)\/(details|challenge|approve|deny|complete|events)$/,
+  );
+  if (scanLogin && (
+    (method === "GET" && (scanLogin[1] === "details" || scanLogin[1] === "events")) ||
+    (method === "POST" && (scanLogin[1] === "challenge" || scanLogin[1] === "approve" || scanLogin[1] === "deny" || scanLogin[1] === "complete"))
+  )) {
+    return handlers.handleLoginScanRequest(request, env, scanLogin[0], scanLogin[1]);
   }
   if (method === "POST" && url.pathname === "/api/logout") {
     return handlers.handleLogout(request);
@@ -132,6 +153,9 @@ async function dispatchDepositRoute(
   }
   if (method === "POST" && url.pathname === "/api/deposits/quote") {
     return handlers.handleDepositQuote(request, env);
+  }
+  if (method === "GET" && url.pathname === "/api/deposits/intent") {
+    return handlers.handleDepositIntent(request, env);
   }
   if (method === "POST" && url.pathname === "/api/deposits/settle") {
     return handlers.handleDepositSettle(request, env);

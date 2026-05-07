@@ -44,22 +44,11 @@ function buildTrustWalletLink(url) {
 }
 
 function buildPayDepositUrl(quote) {
-  const accept = quote.payment_requirement?.accepts?.[0];
-  const auth = quote.authorization;
-  const data = {
-    pid: quote.payment_id,
-    qt: quote.quote_token,
-    auth: {
-      to: auth.to,
-      v: auth.value,
-      va: auth.valid_after,
-      vb: auth.valid_before,
-      n: auth.nonce,
-    },
-    accept,  // 完整后端 accept 对象
-  };
-  const encoded = btoa(JSON.stringify(data));
-  return `${window.location.origin}/pay-deposit?d=${encodeURIComponent(encoded)}`;
+  return `${window.location.origin}/pay-deposit?i=${encodeURIComponent(quote.intent_token)}`;
+}
+
+function paymentCurrencyFromAccept(accept) {
+  return accept?.extra?.currency || "USDC";
 }
 
 export default function DepositDialog({
@@ -82,6 +71,7 @@ export default function DepositDialog({
   const [autopayState, setAutopayState] = useState("");
   const [websocketUrl, setWebsocketUrl] = useState("");
   const [error, setError] = useState("");
+  const [paymentCurrency, setPaymentCurrency] = useState("USDC");
 
   useEffect(() => {
     if (open) {
@@ -92,6 +82,7 @@ export default function DepositDialog({
       setAutopayState("");
       setWebsocketUrl("");
       setError("");
+      setPaymentCurrency("USDC");
     }
   }, [open]);
 
@@ -127,6 +118,8 @@ export default function DepositDialog({
       const qToken = quote.quote_token;
       const accept = quote.payment_requirement?.accepts?.[0];
       if (!accept) throw new Error("Invalid payment requirement from server.");
+      const currency = paymentCurrencyFromAccept(accept);
+      setPaymentCurrency(currency);
 
       const chainId = "0x2105";
 
@@ -158,7 +151,7 @@ export default function DepositDialog({
       const auth = quote.authorization;
       if (!auth) throw new Error("Missing authorization data from server.");
 
-      // Construct EIP-712 typed data for USDC transferWithAuthorization
+      // Construct EIP-712 typed data for the selected token transferWithAuthorization
       const typedData = {
         types: {
           TransferWithAuthorization: [
@@ -243,23 +236,34 @@ export default function DepositDialog({
       setError("");
       setPhase("creating");
 
-      const quote = await request("/api/deposits/quote", {
-        method: "POST",
-        body: JSON.stringify({ amount: amount.trim() }),
-      });
+      try {
+        const quote = await request("/api/deposits/quote", {
+          method: "POST",
+          body: JSON.stringify({ amount: amount.trim() }),
+        });
+        setPaymentCurrency(
+          paymentCurrencyFromAccept(quote.payment_requirement?.accepts?.[0]),
+        );
 
-      const payUrl = buildPayDepositUrl(quote);
-      setPaymentId(quote.payment_id);
+        const payUrl = buildPayDepositUrl(quote);
+        setPaymentId(quote.payment_id);
 
-      const qr = await QRCode.toDataURL(payUrl, {
-        margin: 1,
-        scale: 8,
-        color: { dark: "#111827", light: "#ffffff" },
-      });
+        const qr = await QRCode.toDataURL(payUrl, {
+          margin: 1,
+          scale: 8,
+          color: { dark: "#111827", light: "#ffffff" },
+        });
 
-      setQrUrl(qr);
-      setPaymentUrl(payUrl);
-      setPhase("waiting");
+        setQrUrl(qr);
+        setPaymentUrl(payUrl);
+        setPhase("waiting");
+      } catch (e) {
+        const message = readableErrorFromError(e) || "Payment preparation failed.";
+        console.error("Failed to prepare wallet payment", e);
+        setError(message);
+        setPhase("input");
+        throw e;
+      }
     });
   }
 
@@ -283,7 +287,7 @@ export default function DepositDialog({
               onChange={(event) => setAmount(event.target.value)}
               disabled={phase !== "input"}
             />
-            <span className="input-suffix">USDC</span>
+            <span className="input-suffix">{paymentCurrency}</span>
           </div>
         </label>
       </div>
@@ -293,7 +297,7 @@ export default function DepositDialog({
           <>
             {hasEthereumBrowser() ? (
               <button disabled={isBusy} className="primary" onClick={payWithBrowserWallet}>
-                Pay {amount} USDC
+                Pay {amount} {paymentCurrency}
               </button>
             ) : (
               <button disabled={isBusy} className="primary" onClick={startWalletPayment}>

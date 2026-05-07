@@ -163,11 +163,22 @@ export function createPaymentRequirementFromValues(
           kind: input.kind,
           id: input.id,
           amount_decimal: formatMoney(input.amount),
-          currency: "USDC",
+          currency: getX402AssetSymbol(env),
         },
       },
     ],
   };
+}
+
+export function paymentCurrencyFromRequirement(
+  requirement: PaymentRequirement,
+): string {
+  const accept = requirement.accepts[0];
+  const configured = accept?.extra?.currency;
+  if (typeof configured === "string" && configured.trim()) {
+    return configured.trim().toUpperCase();
+  }
+  return assetSymbolFromPaymentRequirement(requirement);
 }
 
 export function getRpcUrl(env: Env): string {
@@ -546,6 +557,46 @@ function getX402AssetDomainVersion(env: Env): string {
       env as { X402_ASSET_DOMAIN_VERSION?: string }
     ).X402_ASSET_DOMAIN_VERSION?.trim() || "2"
   );
+}
+
+function getX402AssetSymbol(env: Env): string {
+  const configured = (
+    env as { X402_ASSET_SYMBOL?: string }
+  ).X402_ASSET_SYMBOL?.trim();
+  if (configured) return configured.toUpperCase();
+  return assetSymbolFromPaymentRequirement({
+    x402Version: 2,
+    resource: { url: "" },
+    accepts: [
+      {
+        scheme: "exact",
+        network: env.X402_NETWORK || BASE_MAINNET,
+        asset: env.X402_ASSET || BASE_USDC,
+        amount: "0",
+        payTo: "0x0000000000000000000000000000000000000000",
+      },
+    ],
+  });
+}
+
+function assetSymbolFromPaymentRequirement(
+  requirement: PaymentRequirement,
+): string {
+  const accept = requirement.accepts[0];
+  const network = accept?.network;
+  const asset = accept?.asset?.toLowerCase();
+  if (
+    network === "eip155:84532" &&
+    asset === "0x036cbd53842c5426634e7929541ec2318f3dcf7e"
+  ) {
+    return "USDC";
+  }
+  if (network === BASE_MAINNET) {
+    if (asset === BASE_USDC.toLowerCase()) return "USDC";
+    if (asset === "0xfde4c96c8593536e31f229ea8f37b2adac255bb2")
+      return "USDT";
+  }
+  return "TOKEN";
 }
 
 export function requireRecipientAddress(env: Env): string {

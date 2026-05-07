@@ -1,4 +1,5 @@
 import { routeHandlers, scheduledReconcile } from "./app";
+export { LoginSession } from "./login";
 import {
   asHttpError,
   corsPreflightResponse,

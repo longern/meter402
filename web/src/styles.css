@@ -579,6 +579,38 @@ button:disabled {
   font-size: 18px;
 }
 
+.wallet-login-site {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 28px;
+  color: #111827;
+}
+
+.wallet-login-site img {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+}
+
+.wallet-login-site div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.wallet-login-site strong {
+  font-size: 16px;
+  font-weight: 750;
+}
+
+.wallet-login-site span {
+  color: #6b7280;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
 .login-step-viewport {
   grid-area: step;
   display: grid;
@@ -684,6 +716,53 @@ button:disabled {
   gap: 16px;
 }
 
+.login-direct {
+  display: grid;
+  align-content: center;
+  gap: 12px;
+  min-height: 220px;
+}
+
+.login-direct h2 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.login-direct p {
+  margin: 0;
+}
+
+.wallet-login-safety {
+  display: grid;
+  gap: 10px;
+  padding: 16px 18px;
+  border: 1px solid #dbe7ef;
+  border-left: 4px solid #0f766e;
+  border-radius: 8px;
+  background: #f8fbfb;
+  color: #1f2937;
+}
+
+.wallet-login-safety strong {
+  color: #0f172a;
+  font-size: 15px;
+  font-weight: 750;
+}
+
+.wallet-login-safety ul {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding-left: 18px;
+  color: #4b5563;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.wallet-login-safety li::marker {
+  color: #0f766e;
+}
+
 .login-authorization-header {
   display: grid;
   gap: 12px;
@@ -713,8 +792,13 @@ button:disabled {
   font-weight: 800;
 }
 
+.login-scan-option {
+  justify-items: center;
+}
+
 .login-approval-option img,
-.login-qr-expired {
+.login-qr-expired,
+.login-scan-active {
   display: block;
   width: min(100%, 176px);
   height: auto;
@@ -771,6 +855,39 @@ button:disabled {
 
 .login-qr-expired small {
   color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.login-scan-active {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  box-sizing: border-box;
+  padding: 16px;
+  border: 1px solid #bbf7d0;
+  background: #f0fdf4;
+  color: #064e3b;
+  text-align: center;
+}
+
+.login-scan-active span {
+  width: 42px;
+  height: 42px;
+  box-sizing: border-box;
+  border: 3px solid rgba(5, 150, 105, 0.18);
+  border-top-color: #059669;
+  border-radius: 999px;
+  animation: login-spin 820ms linear infinite;
+}
+
+.login-scan-active strong {
+  font-size: 14px;
+}
+
+.login-scan-active small {
+  color: #047857;
   font-size: 12px;
   font-weight: 700;
 }
@@ -1009,6 +1126,31 @@ button:disabled {
 }
 
 .login-complete dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font:
+    13px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Consolas,
+    monospace;
+}
+
+.login-result {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px 12px;
+  margin: 8px 0 0;
+}
+
+.login-result dt {
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.login-result dd {
   margin: 0;
   min-width: 0;
   overflow-wrap: anywhere;
@@ -1698,8 +1840,16 @@ textarea {
     font-size: 28px;
   }
 
+  .wallet-login-site {
+    margin-bottom: 22px;
+  }
+
   .login-heading p:last-child {
     font-size: 16px;
+  }
+
+  .wallet-login-safety {
+    padding: 14px 15px;
   }
 
   .login-actions {

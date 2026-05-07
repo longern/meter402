@@ -12,6 +12,14 @@ html_handling = "auto-trailing-slash"
 not_found_handling = "single-page-application"
 run_worker_first = ["/api/*", "/v1/*", "/health"]
 
+[[durable_objects.bindings]]
+name = "LOGIN_SESSIONS"
+class_name = "LoginSession"
+
+[[migrations]]
+tag = "v1_login_sessions"
+new_sqlite_classes = ["LoginSession"]
+
 [[d1_databases]]
 binding = "DB"
 database_name = "meteria402"
@@ -21,9 +29,12 @@ migrations_dir = "migrations"
 [observability.logs]
 enabled = true
 
+[triggers]
+crons = ["*/5 * * * *"]
+
 [vars]
+CLOUDFLARE_ACCOUNT_ID = "47d267b33cc0b14271613d84942946bb"
 AI_GATEWAY_ID = "default"
-UPSTREAM_BASE_URL = ""
 X402_ASSET_DECIMALS = "6"
 DEFAULT_MIN_DEPOSIT = "5.00"
 DEFAULT_CONCURRENCY_LIMIT = "1"
@@ -38,4 +49,3 @@ ALLOW_DEV_PAYMENTS = "false"
 # wrangler secret put AI_GATEWAY_AUTH_TOKEN
 # wrangler secret put X402_RECIPIENT_ADDRESS
 # wrangler secret put X402_FACILITATOR_AUTH_TOKEN
-# wrangler secret put APP_SIGNING_SECRET

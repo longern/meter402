@@ -9,8 +9,10 @@ export type Env = {
   X402_FACILITATOR_URL?: string;
   X402_FACILITATOR_AUTH_TOKEN?: string;
   X402_RECIPIENT_ADDRESS?: string;
+  X402_RECIPIENT_PRIVATE_KEY?: string;
   X402_NETWORK?: string;
   X402_ASSET?: string;
+  X402_ASSET_SYMBOL?: string;
   X402_RPC_URL?: string;
   UPSTREAM_BASE_URL?: string;
   DEFAULT_MIN_DEPOSIT?: string;
@@ -19,7 +21,9 @@ export type Env = {
   DEFAULT_OUTPUT_MICRO_USD_PER_TOKEN?: string;
   ALLOW_DEV_PAYMENTS?: string;
   X402_ASSET_DECIMALS?: string;
-  APP_SIGNING_SECRET?: string;
+  AUTOPAY_REQUESTER_ORIGIN?: string;
+  AUTOPAY_REQUESTER_NAME?: string;
+  LOGIN_SESSIONS: DurableObjectNamespace;
 };
 
 export type Account = {
@@ -91,6 +95,17 @@ export type LoginState = {
   expires_at: number;
 };
 
+export type LoginChallengeState = {
+  address: string;
+  request_id?: string;
+  nonce: string;
+  domain: string;
+  uri: string;
+  chain_id: number;
+  issued_at: string;
+  expires_at: number;
+};
+
 export type SessionState = {
   owner: string;
   autopay_url: string;
@@ -101,8 +116,27 @@ export type DepositQuoteState = {
   payment_id: string;
   kind: "deposit";
   amount: number;
-  currency: "USD";
+  currency: string;
   payment_requirement: PaymentRequirement;
+  authorization: {
+    nonce: string;
+    valid_after: string;
+    valid_before: string;
+  };
+  expires_at: number;
+};
+
+export type DepositIntentState = {
+  payment_id: string;
+  amount: number;
+  token_amount: string;
+  currency: string;
+  network: string;
+  asset: string;
+  pay_to: string;
+  nonce: string;
+  valid_after: string;
+  valid_before: string;
   expires_at: number;
 };
 

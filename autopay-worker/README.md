@@ -12,7 +12,8 @@ The payment requester creates a short-lived authorization request, shows the ret
 - Each authorization request is short-lived and stored in a Durable Object session.
 - Polling uses a private `poll_token` that is returned only to the requester, not embedded in the QR URL.
 - SIWE `Resources` bind the authorization to the capability, auth request ID, and optionally a payment requirement hash.
-- The capability limits origin, recipient, network, asset, max single payment, and policy expiration.
+- The capability limits requester wallet, origin, recipient, network, asset, max single payment, and policy expiration.
+- `/api/pay` requires an EIP-712 requester wallet proof bound to the request body and capability hash.
 - Only fund the hot wallet with a small amount of USDC.
 
 ## Configure
@@ -82,6 +83,11 @@ Content-Type: application/json
     "x402Version": 2,
     "resource": { "url": "https://api.example.com/protected" },
     "accepts": []
+  },
+  "requester": {
+    "name": "Example App",
+    "origin": "https://app.example.com",
+    "account": "eip155:8453:0xRequesterWallet"
   },
   "returnOrigin": "https://app.example.com",
   "ttlSeconds": 300,
@@ -156,6 +162,11 @@ Then request payment headers:
 ```http
 POST /api/pay
 Content-Type: application/json
+X-Requester-Account: eip155:8453:0xRequesterWallet
+X-Requester-Nonce: random-nonce
+X-Requester-Issued-At: 1770000000
+X-Requester-Expires-At: 1770000060
+X-Requester-Signature: 0x...
 
 {
   "siwe_message": "...",
@@ -167,6 +178,11 @@ Content-Type: application/json
   }
 }
 ```
+
+The requester signature is EIP-712 typed data over `worker`, `path`,
+`bodyHash`, `capabilityHash`, `nonce`, `issuedAt`, and `expiresAt`. The worker
+recovers the requester wallet and requires it to match the wallet bound into the
+owner-signed capability.
 
 Use the returned `headers` to retry the original paid request.
 

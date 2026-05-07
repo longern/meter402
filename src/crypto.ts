@@ -18,10 +18,19 @@ export function base64UrlEncodeBytes(bytes: Uint8Array): string {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
-export function base64UrlDecodeText(value: string): string {
+export function base64UrlDecodeBytes(value: string): Uint8Array {
   const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
   const padded = normalized.padEnd(normalized.length + ((4 - normalized.length % 4) % 4), "=");
-  return atob(padded);
+  const binary = atob(padded);
+  const output = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    output[index] = binary.charCodeAt(index);
+  }
+  return output;
+}
+
+export function base64UrlDecodeText(value: string): string {
+  return new TextDecoder().decode(base64UrlDecodeBytes(value));
 }
 
 export async function sha256Hex(input: string): Promise<string> {

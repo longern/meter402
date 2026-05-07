@@ -561,6 +561,13 @@ function App() {
                   <dt>Asset</dt><dd>{policy.asset}</dd>
                   <dt>Max amount</dt><dd>{policy.maxSingleAmount}</dd>
                   <dt>Policy valid before</dt><dd>{policy.validBefore}</dd>
+                  {policy.requester && (
+                    <>
+                      <dt>Requester</dt><dd>{policy.requester.name || policy.requester.origin}</dd>
+                      <dt>Requester origin</dt><dd>{policy.requester.origin}</dd>
+                      <dt>Requester wallet</dt><dd>{policy.requester.account}</dd>
+                    </>
+                  )}
                   <dt>Origins</dt><dd>{policy.allowedOrigins.join(", ")}</dd>
                   <dt>Recipients</dt><dd>{policy.allowedPayTo.join(", ")}</dd>
                   <dt>Payment hash</dt><dd>{authRequest.payment_requirement_hash || "Not bound"}</dd>

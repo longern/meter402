@@ -1,7 +1,7 @@
 import { normalizeAutopayUrl } from "./autopay";
-import { base64UrlDecodeText, base64UrlEncodeBytes, base64UrlEncodeText, canonicalJson } from "./crypto";
+import { base64UrlDecodeBytes, base64UrlDecodeText, base64UrlEncodeBytes, base64UrlEncodeText, canonicalJson } from "./crypto";
 import { HttpError, requireString } from "./http";
-import type { DepositAutopayState, DepositQuoteState, Env, LoginState, PaymentRequirement, SessionState } from "./types";
+import type { DepositAutopayState, DepositIntentState, DepositQuoteState, Env, LoginChallengeState, LoginState, PaymentRequirement, SessionState } from "./types";
 
 export async function signDepositQuote(env: Env, state: DepositQuoteState): Promise<string> {
   const payload = base64UrlEncodeText(canonicalJson(state));
@@ -14,6 +14,22 @@ export async function verifyDepositQuote(env: Env, token: string): Promise<Depos
   const state = normalizeDepositQuote(parsed);
   if (state.expires_at <= Date.now()) {
     throw new HttpError(410, "deposit_quote_expired", "Deposit quote has expired.");
+  }
+  return state;
+}
+
+export async function signDepositIntent(env: Env, state: DepositIntentState): Promise<string> {
+  const payload = compactDepositIntent(state);
+  const signature = await hmacSha256Base64Url(requireLoginStateSecret(env), payload);
+  return `c2.${payload}.${signature}`;
+}
+
+export async function verifyDepositIntent(env: Env, token: string): Promise<DepositIntentState> {
+  const state = token.startsWith("c1.") || token.startsWith("c2.")
+    ? await verifyCompactDepositIntent(env, token)
+    : normalizeDepositIntent(await verifySignedJson(env, token, "deposit_intent"));
+  if (state.expires_at <= Date.now()) {
+    throw new HttpError(410, "deposit_intent_expired", "Deposit intent has expired.");
   }
   return state;
 }
@@ -44,6 +60,21 @@ export async function verifyLoginState(env: Env, token: string): Promise<LoginSt
   const state = normalizeLoginState(parsed);
   if (state.expires_at <= Date.now()) {
     throw new HttpError(410, "login_state_expired", "Login state has expired.");
+  }
+  return state;
+}
+
+export async function signLoginChallengeState(env: Env, state: LoginChallengeState): Promise<string> {
+  const payload = base64UrlEncodeText(canonicalJson(state));
+  const signature = await hmacSha256Base64Url(requireLoginStateSecret(env), payload);
+  return `${payload}.${signature}`;
+}
+
+export async function verifyLoginChallengeState(env: Env, token: string): Promise<LoginChallengeState> {
+  const parsed = await verifySignedJson(env, token, "login_challenge");
+  const state = normalizeLoginChallengeState(parsed);
+  if (state.expires_at <= Date.now()) {
+    throw new HttpError(410, "login_challenge_expired", "Login challenge has expired.");
   }
   return state;
 }
@@ -93,7 +124,34 @@ function normalizeSessionState(value: unknown): SessionState {
   }
   return {
     owner: state.owner,
-    autopay_url: normalizeAutopayUrl(state.autopay_url),
+    autopay_url: typeof state.autopay_url === "string" && state.autopay_url.trim()
+      ? normalizeAutopayUrl(state.autopay_url)
+      : "",
+    expires_at: expiresAt,
+  };
+}
+
+function normalizeLoginChallengeState(value: unknown): LoginChallengeState {
+  if (!value || typeof value !== "object") {
+    throw new HttpError(400, "invalid_login_challenge", "Login challenge must be an object.");
+  }
+  const state = value as Record<string, unknown>;
+  const expiresAt = typeof state.expires_at === "number" ? state.expires_at : 0;
+  const chainId = typeof state.chain_id === "number" ? state.chain_id : 0;
+  if (!Number.isFinite(expiresAt) || expiresAt <= 0) {
+    throw new HttpError(400, "invalid_login_challenge", "Login challenge expiration is invalid.");
+  }
+  if (!Number.isSafeInteger(chainId) || chainId <= 0) {
+    throw new HttpError(400, "invalid_login_challenge", "Login challenge chain ID is invalid.");
+  }
+  return {
+    address: requireString(state.address, "address"),
+    request_id: typeof state.request_id === "string" && state.request_id.trim() ? state.request_id : undefined,
+    nonce: requireString(state.nonce, "nonce"),
+    domain: requireString(state.domain, "domain"),
+    uri: requireString(state.uri, "uri"),
+    chain_id: chainId,
+    issued_at: requireString(state.issued_at, "issued_at"),
     expires_at: expiresAt,
   };
 }
@@ -133,7 +191,11 @@ function normalizeDepositQuote(value: unknown): DepositQuoteState {
   if (!Number.isFinite(expiresAt) || expiresAt <= 0) {
     throw new HttpError(400, "invalid_deposit_quote", "Deposit quote expiration is invalid.");
   }
-  if (state.kind !== "deposit" || state.currency !== "USD") {
+  if (
+    state.kind !== "deposit" ||
+    typeof state.currency !== "string" ||
+    !state.currency.trim()
+  ) {
     throw new HttpError(400, "invalid_deposit_quote", "Deposit quote kind is invalid.");
   }
   if (requirementKind !== "deposit" || requirementId !== paymentId) {
@@ -143,10 +205,138 @@ function normalizeDepositQuote(value: unknown): DepositQuoteState {
     payment_id: paymentId,
     kind: "deposit",
     amount,
-    currency: "USD",
+    currency: state.currency.trim().toUpperCase(),
     payment_requirement: requirement,
+    authorization: {
+      nonce: requireString(state.authorization && typeof state.authorization === "object" ? (state.authorization as Record<string, unknown>).nonce : undefined, "authorization.nonce"),
+      valid_after: requireString(state.authorization && typeof state.authorization === "object" ? (state.authorization as Record<string, unknown>).valid_after : undefined, "authorization.valid_after"),
+      valid_before: requireString(state.authorization && typeof state.authorization === "object" ? (state.authorization as Record<string, unknown>).valid_before : undefined, "authorization.valid_before"),
+    },
     expires_at: expiresAt,
   };
+}
+
+function compactDepositIntent(state: DepositIntentState): string {
+  return [
+    state.payment_id,
+    state.amount.toString(36),
+    Number(state.valid_before).toString(36),
+  ].join("~");
+}
+
+async function verifyCompactDepositIntent(env: Env, token: string): Promise<DepositIntentState> {
+  const [version, payload, signature, extra] = token.split(".");
+  if ((version !== "c1" && version !== "c2") || !payload || !signature || extra != null) {
+    throw new HttpError(400, "invalid_deposit_intent", "Deposit intent is invalid.");
+  }
+  const expected = await hmacSha256Base64Url(requireLoginStateSecret(env), payload);
+  if (!constantTimeEqual(signature, expected)) {
+    throw new HttpError(403, "invalid_deposit_intent_signature", "Deposit intent signature is invalid.");
+  }
+  const parts = payload.split("~");
+  if (version === "c1") {
+    const [paymentId, amount, nonce, validAfter, validBefore, expiresAt, extraField] = parts;
+    if (!paymentId || !amount || !nonce || !validAfter || !validBefore || !expiresAt || extraField != null) {
+      throw new HttpError(400, "invalid_deposit_intent", "Deposit intent payload is invalid.");
+    }
+    return {
+      payment_id: paymentId,
+      amount: numberFromBase36(amount, "amount"),
+      token_amount: "",
+      currency: "",
+      network: "",
+      asset: "",
+      pay_to: "",
+      nonce: nonceBase64UrlToHex(nonce),
+      valid_after: String(numberFromBase36(validAfter, "valid_after")),
+      valid_before: String(numberFromBase36(validBefore, "valid_before")),
+      expires_at: numberFromBase36(expiresAt, "expires_at"),
+    };
+  }
+
+  const [paymentId, amount, validBefore, extraField] = parts;
+  if (!paymentId || !amount || !validBefore || extraField != null) {
+    throw new HttpError(400, "invalid_deposit_intent", "Deposit intent payload is invalid.");
+  }
+  const validBeforeSeconds = numberFromBase36(validBefore, "valid_before");
+  return {
+    payment_id: paymentId,
+    amount: numberFromBase36(amount, "amount"),
+    token_amount: "",
+    currency: "",
+    network: "",
+    asset: "",
+    pay_to: "",
+    nonce: await nonceFromCompactIntent(payload, signature),
+    valid_after: String(validBeforeSeconds - 360),
+    valid_before: String(validBeforeSeconds),
+    expires_at: validBeforeSeconds * 1000,
+  };
+}
+
+function normalizeDepositIntent(value: unknown): DepositIntentState {
+  if (!value || typeof value !== "object") {
+    throw new HttpError(400, "invalid_deposit_intent", "Deposit intent must be an object.");
+  }
+  const state = value as Record<string, unknown>;
+  const amount = typeof state.a === "number" ? state.a : 0;
+  const expiresAt = typeof state.e === "number" ? state.e : 0;
+  if (!Number.isInteger(amount) || amount <= 0) {
+    throw new HttpError(400, "invalid_deposit_intent", "Deposit intent amount is invalid.");
+  }
+  if (!Number.isFinite(expiresAt) || expiresAt <= 0) {
+    throw new HttpError(400, "invalid_deposit_intent", "Deposit intent expiration is invalid.");
+  }
+  return {
+    payment_id: requireString(state.p, "payment_id"),
+    amount,
+    token_amount: requireString(state.x, "token_amount"),
+    currency: requireString(state.c, "currency").trim().toUpperCase(),
+    network: requireString(state.n, "network"),
+    asset: requireString(state.t, "asset"),
+    pay_to: requireString(state.r, "pay_to"),
+    nonce: requireString(state.o, "nonce"),
+    valid_after: requireString(state.va, "valid_after"),
+    valid_before: requireString(state.vb, "valid_before"),
+    expires_at: expiresAt,
+  };
+}
+
+function numberFromBase36(value: string, field: string): number {
+  if (!/^[0-9a-z]+$/.test(value)) {
+    throw new HttpError(400, "invalid_deposit_intent", `Deposit intent ${field} is invalid.`);
+  }
+  const parsed = parseInt(value, 36);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new HttpError(400, "invalid_deposit_intent", `Deposit intent ${field} is invalid.`);
+  }
+  return parsed;
+}
+
+function nonceHexToBase64Url(value: string): string {
+  const hex = value.startsWith("0x") ? value.slice(2) : value;
+  if (!/^[0-9a-fA-F]{64}$/.test(hex)) {
+    throw new HttpError(500, "invalid_deposit_intent", "Deposit intent nonce is invalid.");
+  }
+  const bytes = new Uint8Array(32);
+  for (let index = 0; index < bytes.length; index += 1) {
+    bytes[index] = parseInt(hex.slice(index * 2, index * 2 + 2), 16);
+  }
+  return base64UrlEncodeBytes(bytes);
+}
+
+function nonceBase64UrlToHex(value: string): string {
+  const bytes = base64UrlDecodeBytes(value);
+  if (bytes.length !== 32) {
+    throw new HttpError(400, "invalid_deposit_intent", "Deposit intent nonce is invalid.");
+  }
+  return `0x${[...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
+async function nonceFromCompactIntent(payload: string, signature: string): Promise<string> {
+  const input = new TextEncoder().encode(`deposit-intent-nonce:${payload}.${signature}`);
+  const digest = await crypto.subtle.digest("SHA-256", input);
+  return `0x${[...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
 function normalizePaymentRequirement(value: unknown): PaymentRequirement {
@@ -184,11 +374,14 @@ function normalizeDepositAutopayState(value: unknown): DepositAutopayState {
 }
 
 function requireLoginStateSecret(env: Env): string {
-  const secret = env.APP_SIGNING_SECRET?.trim();
-  if (!secret || secret.length < 16) {
-    throw new HttpError(500, "missing_app_signing_secret", "APP_SIGNING_SECRET must be configured with at least 16 characters.");
+  const recipientPrivateKey = env.X402_RECIPIENT_PRIVATE_KEY?.trim();
+  if (!recipientPrivateKey) {
+    throw new HttpError(500, "missing_recipient_private_key", "X402_RECIPIENT_PRIVATE_KEY must be configured.");
   }
-  return secret;
+  if (!/^0x[0-9a-fA-F]{64}$/.test(recipientPrivateKey)) {
+    throw new HttpError(500, "invalid_recipient_private_key", "X402_RECIPIENT_PRIVATE_KEY must be a valid EVM private key.");
+  }
+  return `meteria402:signed-state:v1:${recipientPrivateKey}`;
 }
 
 async function hmacSha256Base64Url(secret: string, payload: string): Promise<string> {

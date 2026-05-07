@@ -41,11 +41,19 @@ import {
   parsePositiveInt,
 } from "./money";
 import {
+  handleLoginChallenge,
+  handleLoginComplete,
+  handleLoginScanRequest,
+  handleLoginScanStart,
+} from "./login";
+import {
   signDepositAutopayState,
+  signDepositIntent,
   signDepositQuote,
   signLoginState,
   signSessionState,
   verifyDepositAutopayState,
+  verifyDepositIntent,
   verifyDepositQuote,
   verifyLoginState,
 } from "./signed-state";
@@ -56,10 +64,16 @@ import {
   serializeSessionCookie,
   sessionExpiresAt,
 } from "./session";
+import {
+  hashAutopayCapability,
+  requesterMetadata,
+  signedAutopayHeaders,
+} from "./requester-proof";
 import type {
   AutopayRequestRow,
   ChatBody,
   DepositAutopayState,
+  DepositIntentState,
   DepositQuoteState,
   Env,
   PaymentRequirement,
@@ -72,6 +86,7 @@ import {
   formatTokenAmount,
   getRpcUrl,
   normalizeEvmAddress,
+  paymentCurrencyFromRequirement,
   readErc20Balance,
   requireRecipientAddress,
   settlementErrorExtra,
@@ -88,12 +103,15 @@ export const routeHandlers: RouteHandlers = {
   handleGetConfig,
   handleAutopayWalletBalance,
   handleGetSession,
-  handleLoginAutopayStart,
-  handleLoginAutopayComplete,
+  handleLoginChallenge,
+  handleLoginComplete,
+  handleLoginScanStart,
+  handleLoginScanRequest,
   handleLogout,
   handleUpdateSessionAutopay,
   handleListDeposits,
   handleDepositQuote,
+  handleDepositIntent,
   handleDepositSettle,
   handleDepositAutopayStart,
   handleDepositAutopayComplete,
@@ -398,6 +416,7 @@ async function handleDepositQuote(
     amount,
     description: "Refundable Meteria402 API deposit",
   });
+  const paymentCurrency = paymentCurrencyFromRequirement(requirement);
 
   const nowSeconds = Math.floor(Date.now() / 1000);
   const validAfter = nowSeconds - 60; // allow 1 min clock skew
@@ -406,41 +425,41 @@ async function handleDepositQuote(
   crypto.getRandomValues(nonceBytes);
   const nonce =
     "0x" + [...nonceBytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+  const authMeta = {
+    nonce,
+    valid_after: String(validAfter),
+    valid_before: String(validBefore),
+  };
 
   const expiresAt = Date.now() + 60 * 60 * 1000;
   const quoteToken = await signDepositQuote(env, {
     payment_id: paymentId,
     kind: "deposit",
     amount,
-    currency: "USD",
+    currency: paymentCurrency,
     payment_requirement: requirement,
+    authorization: authMeta,
     expires_at: expiresAt,
   });
-
-  // Create pending payment record with nonce
-  const dbNow = new Date().toISOString();
-  const authMeta = {
+  const accept = requirement.accepts[0];
+  const intentToken = await signDepositIntent(env, {
+    payment_id: paymentId,
+    amount,
+    token_amount: accept.amount,
+    currency: paymentCurrency,
+    network: accept.network,
+    asset: accept.asset,
+    pay_to: accept.payTo,
     nonce,
     valid_after: String(validAfter),
     valid_before: String(validBefore),
-  };
-  await env.DB.prepare(
-    `INSERT INTO meteria402_payments (id, kind, amount, currency, status, payment_requirement_json, response_json, created_at)
-     VALUES (?, 'deposit', ?, 'USD', 'pending', ?, ?, ?)`,
-  )
-    .bind(
-      paymentId,
-      amount,
-      JSON.stringify(requirement),
-      JSON.stringify(authMeta),
-      dbNow,
-    )
-    .run();
+    expires_at: expiresAt,
+  });
 
   return jsonResponse({
     payment_id: paymentId,
     amount: formatMoney(amount),
-    currency: "USD",
+    currency: paymentCurrency,
     payment_requirement: requirement,
     authorization: {
       to: requirement.accepts[0].payTo,
@@ -450,6 +469,7 @@ async function handleDepositQuote(
       nonce,
     },
     quote_token: quoteToken,
+    intent_token: intentToken,
     expires_at: new Date(expiresAt).toISOString(),
   });
 }
@@ -459,10 +479,22 @@ async function handleDepositSettle(
   env: Env,
 ): Promise<Response> {
   const body = await readJsonObject(request);
-  const quote = await verifyDepositQuote(
-    env,
-    requireString(body.quote_token ?? body.quoteToken, "quote_token"),
-  );
+  const quoteTokenInput = body.quote_token ?? body.quoteToken;
+  const intentTokenInput = body.deposit_intent ?? body.depositIntent;
+  const quote =
+    quoteTokenInput != null
+      ? await verifyDepositQuote(
+          env,
+          requireString(quoteTokenInput, "quote_token"),
+        )
+      : depositQuoteFromIntent(
+          request,
+          env,
+          await verifyDepositIntent(
+            env,
+            requireString(intentTokenInput, "deposit_intent"),
+          ),
+        );
   const paymentId = requireString(
     body.payment_id ?? quote.payment_id,
     "payment_id",
@@ -494,6 +526,7 @@ async function handleDepositSettle(
       : normalizeAutopayUrl(body.autopay_url ?? body.autopayUrl);
 
   const paymentRequirementJson = JSON.stringify(quote.payment_requirement);
+  const paymentCurrency = quote.currency;
 
   // ─── Check existing payment record early (before verification) ───
   const existingPayment = await env.DB.prepare(
@@ -539,11 +572,12 @@ async function handleDepositSettle(
       if (!existingPayment) {
         await env.DB.prepare(
           `INSERT INTO meteria402_payments (id, kind, amount, currency, status, tx_hash, payment_requirement_json, response_json, created_at)
-           VALUES (?, 'deposit', ?, 'USD', 'verification_failed', ?, ?, ?, ?)`,
+           VALUES (?, 'deposit', ?, ?, 'verification_failed', ?, ?, ?, ?)`,
         )
           .bind(
             paymentId,
             quote.amount,
+            paymentCurrency,
             txHash,
             paymentRequirementJson,
             JSON.stringify({ error: txResult.message }),
@@ -575,12 +609,8 @@ async function handleDepositSettle(
     }
   } else {
     // Validate authorization nonce matches what we issued
-    if (paymentPayload && existingPayment?.response_json) {
+    if (paymentPayload) {
       try {
-        const authMeta = JSON.parse(existingPayment.response_json) as Record<
-          string,
-          unknown
-        >;
         const payload = (paymentPayload as Record<string, unknown> | null)
           ?.payload;
         const payloadAuth =
@@ -589,7 +619,7 @@ async function handleDepositSettle(
             : null;
         if (payloadAuth && typeof payloadAuth === "object") {
           const submittedNonce = (payloadAuth as Record<string, unknown>).nonce;
-          const expectedNonce = authMeta.nonce;
+          const expectedNonce = quote.authorization.nonce;
           if (submittedNonce !== expectedNonce) {
             return errorResponse(
               400,
@@ -636,11 +666,12 @@ async function handleDepositSettle(
       if (!existingPayment) {
         await env.DB.prepare(
           `INSERT INTO meteria402_payments (id, kind, amount, currency, status, payment_requirement_json, response_json, created_at)
-           VALUES (?, 'deposit', ?, 'USD', 'verification_failed', ?, ?, ?)`,
+           VALUES (?, 'deposit', ?, ?, 'verification_failed', ?, ?, ?)`,
         )
           .bind(
             paymentId,
             quote.amount,
+            paymentCurrency,
             paymentRequirementJson,
             JSON.stringify({
               error: settlement.message,
@@ -716,7 +747,7 @@ async function handleDepositSettle(
       ).bind(newBalance, now, existingAccount.id),
       env.DB.prepare(
         `INSERT INTO meteria402_payments (id, account_id, kind, amount, currency, status, x402_payload_hash, tx_hash, payment_requirement_json, response_json, created_at, settled_at)
-         VALUES (?, ?, 'deposit', ?, 'USD', 'settled', ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, 'deposit', ?, ?, 'settled', ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            account_id = excluded.account_id,
            status = 'settled',
@@ -729,6 +760,7 @@ async function handleDepositSettle(
         paymentId,
         existingAccount.id,
         quote.amount,
+        paymentCurrency,
         payloadHash,
         settlement.txHash ?? null,
         paymentRequirementJson,
@@ -738,8 +770,15 @@ async function handleDepositSettle(
       ),
       env.DB.prepare(
         `INSERT INTO meteria402_ledger_entries (id, account_id, type, amount, currency, related_payment_id, created_at)
-         VALUES (?, ?, 'deposit_paid', ?, 'USD', ?, ?)`,
-      ).bind(makeId("led"), existingAccount.id, quote.amount, paymentId, now),
+         VALUES (?, ?, 'deposit_paid', ?, ?, ?, ?)`,
+      ).bind(
+        makeId("led"),
+        existingAccount.id,
+        quote.amount,
+        paymentCurrency,
+        paymentId,
+        now,
+      ),
     ]);
 
     return jsonResponse({
@@ -775,7 +814,7 @@ async function handleDepositSettle(
     env.DB.prepare(
       `INSERT INTO meteria402_payments
        (id, account_id, kind, amount, currency, status, x402_payload_hash, tx_hash, payment_requirement_json, response_json, created_at, settled_at)
-       VALUES (?, ?, 'deposit', ?, 'USD', 'settled', ?, ?, ?, ?, ?, ?)
+       VALUES (?, ?, 'deposit', ?, ?, 'settled', ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          account_id = excluded.account_id,
          status = 'settled',
@@ -788,6 +827,7 @@ async function handleDepositSettle(
       paymentId,
       accountId,
       quote.amount,
+      paymentCurrency,
       payloadHash,
       settlement.txHash ?? null,
       paymentRequirementJson,
@@ -809,8 +849,8 @@ async function handleDepositSettle(
     ),
     env.DB.prepare(
       `INSERT INTO meteria402_ledger_entries (id, account_id, type, amount, currency, related_payment_id, created_at)
-       VALUES (?, ?, 'deposit_paid', ?, 'USD', ?, ?)`,
-    ).bind(makeId("led"), accountId, quote.amount, paymentId, now),
+       VALUES (?, ?, 'deposit_paid', ?, ?, ?, ?)`,
+    ).bind(makeId("led"), accountId, quote.amount, paymentCurrency, paymentId, now),
   ]);
 
   return jsonResponse({
@@ -822,6 +862,76 @@ async function handleDepositSettle(
     payer_address: settlement.payerAddress,
     message: "Store this API key now. It cannot be shown again.",
   });
+}
+
+async function handleDepositIntent(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const url = new URL(request.url);
+  const token = requireString(url.searchParams.get("i"), "deposit_intent");
+  const quote = depositQuoteFromIntent(
+    request,
+    env,
+    await verifyDepositIntent(env, token),
+  );
+  const accept = quote.payment_requirement.accepts[0];
+  return jsonResponse({
+    payment_id: quote.payment_id,
+    amount: formatMoney(quote.amount),
+    currency: quote.currency,
+    payment_requirement: quote.payment_requirement,
+    authorization: {
+      to: accept.payTo,
+      value: accept.amount,
+      valid_after: quote.authorization.valid_after,
+      valid_before: quote.authorization.valid_before,
+      nonce: quote.authorization.nonce,
+    },
+    deposit_intent: token,
+    expires_at: new Date(quote.expires_at).toISOString(),
+  });
+}
+
+function depositQuoteFromIntent(
+  request: Request,
+  env: Env,
+  intent: DepositIntentState,
+): DepositQuoteState {
+  const url = new URL(request.url);
+  const requirement = createPaymentRequirementFromValues(env, {
+    resource: `${url.origin}/api/payments/${intent.payment_id}`,
+    kind: "deposit",
+    id: intent.payment_id,
+    amount: intent.amount,
+    description: "Refundable Meteria402 API deposit",
+  });
+  const accept = requirement.accepts[0];
+  if (
+    (intent.network && accept.network !== intent.network) ||
+    (intent.asset && accept.asset.toLowerCase() !== intent.asset.toLowerCase()) ||
+    (intent.token_amount && accept.amount !== intent.token_amount) ||
+    (intent.pay_to && accept.payTo.toLowerCase() !== intent.pay_to.toLowerCase())
+  ) {
+    throw new HttpError(
+      400,
+      "deposit_intent_config_mismatch",
+      "Deposit intent does not match the current payment configuration.",
+    );
+  }
+  return {
+    payment_id: intent.payment_id,
+    kind: "deposit",
+    amount: intent.amount,
+    currency: intent.currency || paymentCurrencyFromRequirement(requirement),
+    payment_requirement: requirement,
+    authorization: {
+      nonce: intent.nonce,
+      valid_after: intent.valid_after,
+      valid_before: intent.valid_before,
+    },
+    expires_at: intent.expires_at,
+  };
 }
 
 async function handleDepositAutopayStart(
@@ -870,7 +980,7 @@ async function handleDepositAutopayComplete(
       "Payment ID does not match the autopay state.",
     );
   }
-  const result = await completeAutopayForDepositQuote(env, autopayState);
+  const result = await completeAutopayForDepositQuote(env, request, autopayState);
   if (result.status !== "approved") return jsonResponse(result);
 
   const settleRequest = new Request(
@@ -1292,17 +1402,19 @@ async function handleInvoicePayQuote(
     amount: invoice.amount_due,
     description: `Meteria402 invoice ${invoice.id}`,
   });
+  const paymentCurrency = paymentCurrencyFromRequirement(requirement);
 
   await env.DB.prepare(
     `INSERT INTO meteria402_payments
      (id, account_id, invoice_id, kind, amount, currency, status, payment_requirement_json)
-     VALUES (?, ?, ?, 'invoice', ?, 'USD', 'pending', ?)`,
+     VALUES (?, ?, ?, 'invoice', ?, ?, 'pending', ?)`,
   )
     .bind(
       paymentId,
       account.id,
       invoice.id,
       invoice.amount_due,
+      paymentCurrency,
       JSON.stringify(requirement),
     )
     .run();
@@ -1311,7 +1423,7 @@ async function handleInvoicePayQuote(
     payment_id: paymentId,
     invoice_id: invoice.id,
     amount: formatMoney(invoice.amount_due),
-    currency: "USD",
+    currency: paymentCurrency,
     payment_requirement: requirement,
   });
 }
@@ -1387,6 +1499,9 @@ async function handleInvoicePaySettle(
       paymentPayload ?? { dev_proof: devProof, payment_id: paymentId },
     ),
   );
+  const paymentCurrency = paymentCurrencyFromRequirement(
+    JSON.parse(payment.payment_requirement_json) as PaymentRequirement,
+  );
 
   await env.DB.batch([
     env.DB.prepare(
@@ -1412,11 +1527,12 @@ async function handleInvoicePaySettle(
     ).bind(payment.amount, now, account.id),
     env.DB.prepare(
       `INSERT INTO meteria402_ledger_entries (id, account_id, type, amount, currency, related_invoice_id, related_payment_id, created_at)
-       VALUES (?, ?, 'invoice_paid', ?, 'USD', ?, ?, ?)`,
+       VALUES (?, ?, 'invoice_paid', ?, ?, ?, ?, ?)`,
     ).bind(
       makeId("led"),
       account.id,
       payment.amount,
+      paymentCurrency,
       invoiceId,
       paymentId,
       now,
@@ -1464,17 +1580,19 @@ async function handleInvoiceAutopayStart(
     amount: invoice.amount_due,
     description: `Meteria402 invoice ${invoice.id}`,
   });
+  const paymentCurrency = paymentCurrencyFromRequirement(requirement);
 
   await env.DB.prepare(
     `INSERT INTO meteria402_payments
      (id, account_id, invoice_id, kind, amount, currency, status, payment_requirement_json)
-     VALUES (?, ?, ?, 'invoice', ?, 'USD', 'pending', ?)`,
+     VALUES (?, ?, ?, 'invoice', ?, ?, 'pending', ?)`,
   )
     .bind(
       paymentId,
       account.id,
       invoice.id,
       invoice.amount_due,
+      paymentCurrency,
       JSON.stringify(requirement),
     )
     .run();
@@ -1514,7 +1632,7 @@ async function handleInvoiceAutopayComplete(
     );
   }
 
-  const result = await completeAutopayForPayment(env, paymentId);
+  const result = await completeAutopayForPayment(env, request, paymentId);
   if (result.status !== "approved") return jsonResponse(result);
 
   const settleRequest = new Request(
@@ -1610,6 +1728,7 @@ async function startAutopayForPayment(
     headers: JSON_HEADERS,
     body: JSON.stringify({
       paymentRequired,
+      requester: requesterMetadata(env, request),
       returnOrigin: new URL(request.url).origin,
       ttlSeconds: 300,
       policyValidBefore,
@@ -1691,6 +1810,7 @@ async function startAutopayForDepositQuote(
     headers: JSON_HEADERS,
     body: JSON.stringify({
       paymentRequired: quote.payment_requirement,
+      requester: requesterMetadata(env, request),
       returnOrigin: new URL(request.url).origin,
       ttlSeconds: 300,
       policyValidBefore,
@@ -1753,6 +1873,7 @@ async function startAutopayForDepositQuote(
 
 async function completeAutopayForPayment(
   env: Env,
+  request: Request,
   paymentId: string,
 ): Promise<
   Record<string, unknown> & {
@@ -1872,15 +1993,17 @@ async function completeAutopayForPayment(
   const paymentRequired = JSON.parse(
     payment.payment_requirement_json,
   ) as PaymentRequirement;
-  const payResponse = await fetch(`${record.autopay_url}/api/pay`, {
-    method: "POST",
-    headers: JSON_HEADERS,
-    body: JSON.stringify({
+  const payResponse = await callAutopayPay(
+    env,
+    request,
+    `${record.autopay_url}/api/pay`,
+    {
       siwe_message: authorization.siwe_message,
       siwe_signature: authorization.siwe_signature,
       paymentRequired,
-    }),
-  });
+    },
+    authorization.capability,
+  );
   const payBody = (await payResponse.json().catch(() => null)) as Record<
     string,
     unknown
@@ -1905,6 +2028,7 @@ async function completeAutopayForPayment(
 
 async function completeAutopayForDepositQuote(
   env: Env,
+  request: Request,
   state: DepositAutopayState,
 ): Promise<
   Record<string, unknown> & {
@@ -1964,15 +2088,17 @@ async function completeAutopayForDepositQuote(
   }
   const owner = normalizeEvmAddress(authorization.owner);
 
-  const payResponse = await fetch(`${state.autopay_url}/api/pay`, {
-    method: "POST",
-    headers: JSON_HEADERS,
-    body: JSON.stringify({
+  const payResponse = await callAutopayPay(
+    env,
+    request,
+    `${state.autopay_url}/api/pay`,
+    {
       siwe_message: authorization.siwe_message,
       siwe_signature: authorization.siwe_signature,
       paymentRequired: quote.payment_requirement,
-    }),
-  });
+    },
+    authorization.capability,
+  );
   const payBody = (await payResponse.json().catch(() => null)) as Record<
     string,
     unknown
@@ -2169,6 +2295,7 @@ async function handleCreateAutopayCapability(
     headers: JSON_HEADERS,
     body: JSON.stringify({
       kind: "payment",
+      requester: requesterMetadata(env, request),
       returnOrigin: new URL(request.url).origin,
       ttlSeconds: 300,
       policy: {
@@ -2432,6 +2559,30 @@ async function deductCapabilityBudget(
     .run();
 }
 
+async function callAutopayPay(
+  env: Env,
+  request: Request | null,
+  url: string,
+  body: Record<string, unknown>,
+  capability: unknown,
+): Promise<Response> {
+  const bodyText = JSON.stringify(body);
+  const headers = new Headers(JSON_HEADERS);
+  const proofHeaders = await signedAutopayHeaders(
+    env,
+    request,
+    url,
+    bodyText,
+    await hashAutopayCapability(capability),
+  );
+  proofHeaders.forEach((value, key) => headers.set(key, value));
+  return fetch(url, {
+    method: "POST",
+    headers,
+    body: bodyText,
+  });
+}
+
 async function tryAutopayWithCapability(
   env: Env,
   accountId: string,
@@ -2445,15 +2596,18 @@ async function tryAutopayWithCapability(
   if (!capability) return null;
 
   try {
-    const response = await fetch(`${capability.autopay_url}/api/pay`, {
-      method: "POST",
-      headers: JSON_HEADERS,
-      body: JSON.stringify({
+    const parsedCapability = JSON.parse(capability.capability_json);
+    const response = await callAutopayPay(
+      env,
+      null,
+      `${capability.autopay_url}/api/pay`,
+      {
         paymentRequired: JSON.parse(paymentRequirementJson),
         siweMessage: capability.siwe_message,
         siweSignature: capability.siwe_signature,
-      }),
-    });
+      },
+      parsedCapability,
+    );
 
     const body = (await response.json().catch(() => null)) as Record<
       string,
@@ -2512,11 +2666,18 @@ async function tryAutopayRecharge(
   invoiceAmount: number,
 ): Promise<{ ok: true; rechargeAmount: number } | { ok: false }> {
   const account = await getAccount(env, accountId);
-  if (!account || !account.autopay_min_recharge_amount || account.autopay_min_recharge_amount <= 0) {
+  if (
+    !account ||
+    !account.autopay_min_recharge_amount ||
+    account.autopay_min_recharge_amount <= 0
+  ) {
     return { ok: false };
   }
 
-  const rechargeAmount = Math.max(invoiceAmount, account.autopay_min_recharge_amount);
+  const rechargeAmount = Math.max(
+    invoiceAmount,
+    account.autopay_min_recharge_amount,
+  );
 
   const paymentId = makeId("pay");
   const requirement = createPaymentRequirementFromValues(env, {
@@ -2527,6 +2688,7 @@ async function tryAutopayRecharge(
     description: "Auto-recharge for API usage",
   });
 
+  const paymentCurrency = paymentCurrencyFromRequirement(requirement);
   const capResult = await tryAutopayWithCapability(
     env,
     accountId,
@@ -2563,11 +2725,12 @@ async function tryAutopayRecharge(
     ).bind(newBalance, now, accountId),
     env.DB.prepare(
       `INSERT INTO meteria402_payments (id, account_id, kind, amount, currency, status, x402_payload_hash, tx_hash, payment_requirement_json, response_json, created_at, settled_at)
-       VALUES (?, ?, 'deposit', ?, 'USD', 'settled', ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, 'deposit', ?, ?, 'settled', ?, ?, ?, ?, ?, ?)`,
     ).bind(
       paymentId,
       accountId,
       rechargeAmount,
+      paymentCurrency,
       payloadHash,
       settlement.txHash ?? null,
       paymentRequirementJson,
@@ -2577,8 +2740,15 @@ async function tryAutopayRecharge(
     ),
     env.DB.prepare(
       `INSERT INTO meteria402_ledger_entries (id, account_id, type, amount, currency, related_payment_id, created_at)
-       VALUES (?, ?, 'deposit_paid', ?, 'USD', ?, ?)`,
-    ).bind(makeId("led"), accountId, rechargeAmount, paymentId, now),
+       VALUES (?, ?, 'deposit_paid', ?, ?, ?, ?)`,
+    ).bind(
+      makeId("led"),
+      accountId,
+      rechargeAmount,
+      paymentCurrency,
+      paymentId,
+      now,
+    ),
   ]);
 
   return { ok: true, rechargeAmount };
@@ -3288,6 +3458,7 @@ async function settleMeteredRequest(
     amount: cost,
     description: `Meteria402 invoice ${invoiceId}`,
   });
+  const paymentCurrency = paymentCurrencyFromRequirement(requirement);
 
   // Step 1: 先更新 request 状态
   await env.DB.prepare(
@@ -3317,7 +3488,10 @@ async function settleMeteredRequest(
 
   // Step 2: 尝试自动支付
   const autoPay = await tryAutoPayInvoice(env, accountId, cost, requirement);
-  let rechargeResult: { ok: true; rechargeAmount: number } | { ok: false } | undefined = undefined;
+  let rechargeResult:
+    | { ok: true; rechargeAmount: number }
+    | { ok: false }
+    | undefined = undefined;
 
   if (autoPay.ok) {
     // 自动支付成功：invoice 直接 paid
@@ -3326,12 +3500,13 @@ async function settleMeteredRequest(
       env.DB.prepare(
         `INSERT INTO meteria402_invoices
          (id, account_id, request_id, status, amount_due, currency, payment_requirement_json, created_at, paid_at)
-         VALUES (?, ?, ?, 'paid', ?, 'USD', ?, ?, ?)`,
+         VALUES (?, ?, ?, 'paid', ?, ?, ?, ?, ?)`,
       ).bind(
         invoiceId,
         accountId,
         requestId,
         cost,
+        paymentCurrency,
         JSON.stringify(requirement),
         now,
         now,
@@ -3345,8 +3520,16 @@ async function settleMeteredRequest(
       env.DB.prepare(
         `INSERT INTO meteria402_ledger_entries
          (id, account_id, type, amount, currency, related_request_id, related_invoice_id, created_at)
-         VALUES (?, ?, 'invoice_paid', ?, 'USD', ?, ?, ?)`,
-      ).bind(ledgerId, accountId, cost, requestId, invoiceId, now),
+         VALUES (?, ?, 'invoice_paid', ?, ?, ?, ?, ?)`,
+      ).bind(
+        ledgerId,
+        accountId,
+        cost,
+        paymentCurrency,
+        requestId,
+        invoiceId,
+        now,
+      ),
     ];
 
     if (autoPay.method === "excess_deposit") {
@@ -3371,12 +3554,13 @@ async function settleMeteredRequest(
         env.DB.prepare(
           `INSERT INTO meteria402_invoices
            (id, account_id, request_id, status, amount_due, currency, payment_requirement_json, created_at, paid_at)
-           VALUES (?, ?, ?, 'paid', ?, 'USD', ?, ?, ?)`,
+           VALUES (?, ?, ?, 'paid', ?, ?, ?, ?, ?)`,
         ).bind(
           invoiceId,
           accountId,
           requestId,
           cost,
+          paymentCurrency,
           JSON.stringify(requirement),
           now,
           now,
@@ -3391,8 +3575,16 @@ async function settleMeteredRequest(
         env.DB.prepare(
           `INSERT INTO meteria402_ledger_entries
            (id, account_id, type, amount, currency, related_request_id, related_invoice_id, created_at)
-           VALUES (?, ?, 'invoice_paid', ?, 'USD', ?, ?, ?)`,
-        ).bind(ledgerId, accountId, cost, requestId, invoiceId, now),
+           VALUES (?, ?, 'invoice_paid', ?, ?, ?, ?, ?)`,
+        ).bind(
+          ledgerId,
+          accountId,
+          cost,
+          paymentCurrency,
+          requestId,
+          invoiceId,
+          now,
+        ),
       ]);
     } else {
       // 挂账
@@ -3400,12 +3592,13 @@ async function settleMeteredRequest(
         env.DB.prepare(
           `INSERT INTO meteria402_invoices
            (id, account_id, request_id, status, amount_due, currency, payment_requirement_json, created_at)
-           VALUES (?, ?, ?, 'unpaid', ?, 'USD', ?, ?)`,
+           VALUES (?, ?, ?, 'unpaid', ?, ?, ?, ?)`,
         ).bind(
           invoiceId,
           accountId,
           requestId,
           cost,
+          paymentCurrency,
           JSON.stringify(requirement),
           now,
         ),
@@ -3419,8 +3612,16 @@ async function settleMeteredRequest(
         env.DB.prepare(
           `INSERT INTO meteria402_ledger_entries
            (id, account_id, type, amount, currency, related_request_id, related_invoice_id, created_at)
-           VALUES (?, ?, 'invoice_created', ?, 'USD', ?, ?, ?)`,
-        ).bind(makeId("led"), accountId, cost, requestId, invoiceId, now),
+           VALUES (?, ?, 'invoice_created', ?, ?, ?, ?, ?)`,
+        ).bind(
+          makeId("led"),
+          accountId,
+          cost,
+          paymentCurrency,
+          requestId,
+          invoiceId,
+          now,
+        ),
       ]);
     }
   }

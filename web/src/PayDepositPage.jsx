@@ -27,14 +27,76 @@ function shortAddress(value) {
   return `${value.slice(0, 6)}...${value.slice(-4)}`;
 }
 
-// Parse URL data parameter
-function parseUrlData() {
+function paymentCurrency(accept) {
+  return accept?.extra?.currency || "USDC";
+}
+
+function decodeBase64Url(value) {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.padEnd(
+    normalized.length + ((4 - (normalized.length % 4)) % 4),
+    "=",
+  );
+  return atob(padded);
+}
+
+function parseQuoteToken(token) {
+  const [payload] = token.split(".");
+  if (!payload) return null;
+  const quote = JSON.parse(decodeBase64Url(payload));
+  const accept = quote.payment_requirement?.accepts?.[0];
+  const auth = quote.authorization;
+  if (!accept || !auth) return null;
+  return {
+    accept,
+    auth: {
+      to: accept.payTo,
+      v: accept.amount,
+      va: auth.valid_after,
+      vb: auth.valid_before,
+      n: auth.nonce,
+    },
+  };
+}
+
+async function parseUrlData() {
   const params = new URLSearchParams(window.location.search);
+  const intent = params.get("i");
+  if (intent) {
+    const token = decodeURIComponent(intent);
+    const expanded = await fetchJson(`/api/deposits/intent?i=${encodeURIComponent(token)}`);
+    const accept = expanded.payment_requirement?.accepts?.[0];
+    const auth = expanded.authorization;
+    if (!expanded.payment_id || !accept || !auth) return null;
+    return {
+      pid: expanded.payment_id,
+      intent: expanded.deposit_intent || token,
+      accept,
+      auth: {
+        to: auth.to,
+        v: auth.value,
+        va: auth.valid_after,
+        vb: auth.valid_before,
+        n: auth.nonce,
+      },
+    };
+  }
   const encoded = params.get("d");
   if (!encoded) return null;
   try {
-    const json = atob(decodeURIComponent(encoded));
-    return JSON.parse(json);
+    const json = decodeBase64Url(decodeURIComponent(encoded));
+    const data = JSON.parse(json);
+    if (data.pid && data.qt && data.auth && data.accept) return data;
+    const pid = data.p || data.pid;
+    const qt = data.q || data.qt;
+    if (!pid || !qt) return null;
+    const quoteData = parseQuoteToken(qt);
+    if (!quoteData) return null;
+    return {
+      pid,
+      qt,
+      ...quoteData,
+    };
   } catch {
     return null;
   }
@@ -48,14 +110,27 @@ export default function PayDepositPage() {
   const [debugInfo, setDebugInfo] = useState("");
 
   useEffect(() => {
-    const urlData = parseUrlData();
-    if (!urlData || !urlData.pid || !urlData.qt || !urlData.auth) {
-      setStatus("error");
-      setError("Invalid or missing payment data in URL. Please go back and try again.");
-      return;
-    }
-    setData(urlData);
-    setStatus("ready");
+    let cancelled = false;
+    parseUrlData()
+      .then((urlData) => {
+        if (cancelled) return;
+        if (!urlData || !urlData.pid || (!urlData.qt && !urlData.intent) || !urlData.auth) {
+          setStatus("error");
+          setError("Invalid or missing payment data in URL. Please go back and try again.");
+          return;
+        }
+        setData(urlData);
+        setStatus("ready");
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        console.error("Failed to prepare deposit payment", e);
+        setStatus("error");
+        setError(readableError(e));
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   async function startPayment() {
@@ -105,7 +180,7 @@ export default function PayDepositPage() {
       const accept = data.accept;
       const networkId = accept?.network?.replace("eip155:", "") ?? "8453";
 
-      // Construct EIP-712 typed data for USDC transferWithAuthorization
+      // Construct EIP-712 typed data for the selected token transferWithAuthorization
       const typedData = {
         types: {
           TransferWithAuthorization: [
@@ -175,7 +250,7 @@ export default function PayDepositPage() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           payment_id: data.pid,
-          quote_token: data.qt,
+          ...(data.intent ? { deposit_intent: data.intent } : { quote_token: data.qt }),
           payment_payload: x402Payload,
           owner_address: from,
         }),
@@ -232,6 +307,7 @@ export default function PayDepositPage() {
   }
 
   const amount = data ? (Number(data.auth?.v) / 1e6).toFixed(2) : "0.00";
+  const currency = paymentCurrency(data?.accept);
 
   return (
     <div className="pay-deposit-page">
@@ -248,7 +324,7 @@ export default function PayDepositPage() {
             <div className="pay-deposit-summary">
               <div className="data-row">
                 <span>Amount</span>
-                <strong>{amount} USDC</strong>
+                <strong>{amount} {currency}</strong>
               </div>
               <div className="data-row">
                 <span>Network</span>
@@ -264,14 +340,14 @@ export default function PayDepositPage() {
 
             <p className="muted" style={{ marginTop: 16 }}>
               Click below to sign the payment authorization with your wallet.
-              This will create an EIP-712 signature that authorizes the USDC transfer.
+              This will create an EIP-712 signature that authorizes the {currency} transfer.
             </p>
 
             {error && <p className="form-error" style={{ marginTop: 12 }}>{error}</p>}
 
             <div className="pay-deposit-actions">
               <button className="primary" onClick={startPayment}>
-                Sign & Pay {amount} USDC
+                Sign & Pay {amount} {currency}
               </button>
               <button className="text-button" onClick={goHome}>
                 Cancel
@@ -299,7 +375,7 @@ export default function PayDepositPage() {
           <CardSection title="Payment Successful!">
             <div className="pay-deposit-success">
               <div className="success-icon">✓</div>
-              <p>Your deposit of <strong>{amount} USDC</strong> has been received.</p>
+              <p>Your deposit of <strong>{amount} {currency}</strong> has been received.</p>
 
               {result.api_key && (
                 <div className="api-key-box" style={{ marginTop: 16 }}>
@@ -324,7 +400,7 @@ export default function PayDepositPage() {
                 </div>
                 <div className="data-row">
                   <span>Deposit Balance</span>
-                  <strong>{result.deposit_balance} USDC</strong>
+                  <strong>{result.deposit_balance} {currency}</strong>
                 </div>
               </div>
             </div>
