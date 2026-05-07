@@ -22,7 +22,7 @@ export async function authenticate(
   const keyHash = await sha256Hex(apiKey);
   const account = await env.DB.prepare(
     `SELECT a.id, a.status, a.owner_address, a.autopay_url, a.deposit_balance, a.unpaid_invoice_total, a.active_request_count,
-            a.concurrency_limit, a.min_deposit_required, a.refund_address, k.id AS api_key_id
+            a.concurrency_limit, a.min_deposit_required, a.autopay_min_recharge_amount, a.refund_address, k.id AS api_key_id
      FROM meteria402_api_keys k
      JOIN meteria402_accounts a ON a.id = k.account_id
      WHERE k.key_hash = ?
@@ -63,7 +63,7 @@ export async function getAccount(
 ): Promise<Account | null> {
   return env.DB.prepare(
     `SELECT id, status, owner_address, autopay_url, deposit_balance, unpaid_invoice_total, active_request_count,
-            concurrency_limit, min_deposit_required, refund_address
+            concurrency_limit, min_deposit_required, autopay_min_recharge_amount, refund_address
      FROM meteria402_accounts
      WHERE id = ?`,
   )
@@ -77,7 +77,7 @@ export async function getAccountByOwner(
 ): Promise<Account | null> {
   return env.DB.prepare(
     `SELECT id, status, owner_address, autopay_url, deposit_balance, unpaid_invoice_total, active_request_count,
-            concurrency_limit, min_deposit_required, refund_address
+            concurrency_limit, min_deposit_required, autopay_min_recharge_amount, refund_address
      FROM meteria402_accounts
      WHERE lower(owner_address) = lower(?)
      LIMIT 1`,

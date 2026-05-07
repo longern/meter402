@@ -98,6 +98,7 @@ export const routeHandlers: RouteHandlers = {
   handleDepositAutopayStart,
   handleDepositAutopayComplete,
   handleGetAccount,
+  handleUpdateAccount,
   handleListApiKeys,
   handleCreateApiKey,
   handleRevokeApiKey,
@@ -910,6 +911,35 @@ async function handleGetAccount(request: Request, env: Env): Promise<Response> {
     active_request_count: account.active_request_count,
     concurrency_limit: account.concurrency_limit,
     min_deposit_required: formatMoney(account.min_deposit_required),
+    autopay_min_recharge_amount: formatMoney(account.autopay_min_recharge_amount),
+  });
+}
+
+async function handleUpdateAccount(request: Request, env: Env): Promise<Response> {
+  const account = await requireAccountFromSession(request, env);
+  const body = await readJsonObject(request);
+  const newAmount = parseMoney(
+    String(body.autopay_min_recharge_amount ?? body.autopayMinRechargeAmount ?? "0"),
+  );
+  if (newAmount < 0) {
+    return errorResponse(
+      400,
+      "invalid_amount",
+      "autopay_min_recharge_amount must be a non-negative decimal.",
+    );
+  }
+
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    `UPDATE meteria402_accounts SET autopay_min_recharge_amount = ?, updated_at = ? WHERE id = ?`,
+  )
+    .bind(newAmount, now, account.id)
+    .run();
+
+  return jsonResponse({
+    account_id: account.id,
+    autopay_min_recharge_amount: formatMoney(newAmount),
+    updated_at: now,
   });
 }
 
@@ -2476,6 +2506,84 @@ async function tryAutoPayInvoice(
   return { ok: false };
 }
 
+async function tryAutopayRecharge(
+  env: Env,
+  accountId: string,
+  invoiceAmount: number,
+): Promise<{ ok: true; rechargeAmount: number } | { ok: false }> {
+  const account = await getAccount(env, accountId);
+  if (!account || !account.autopay_min_recharge_amount || account.autopay_min_recharge_amount <= 0) {
+    return { ok: false };
+  }
+
+  const rechargeAmount = Math.max(invoiceAmount, account.autopay_min_recharge_amount);
+
+  const paymentId = makeId("pay");
+  const requirement = createPaymentRequirementFromValues(env, {
+    resource: `/api/payments/${paymentId}`,
+    kind: "deposit",
+    id: paymentId,
+    amount: rechargeAmount,
+    description: "Auto-recharge for API usage",
+  });
+
+  const capResult = await tryAutopayWithCapability(
+    env,
+    accountId,
+    JSON.stringify(requirement),
+    rechargeAmount,
+  );
+  if (!capResult) {
+    return { ok: false };
+  }
+
+  const paymentRequirementJson = JSON.stringify(requirement);
+  const settlement = await verifyPayment(env, paymentRequirementJson, capResult.payment_payload);
+  if (!settlement.ok) {
+    console.warn("[auto-recharge] settlement failed", settlement.message);
+    return { ok: false };
+  }
+
+  const now = new Date().toISOString();
+  const payloadHash = await sha256Hex(JSON.stringify(capResult.payment_payload));
+
+  const existingPayload = await env.DB.prepare(
+    `SELECT id FROM meteria402_payments WHERE x402_payload_hash = ?`,
+  ).bind(payloadHash).first<{ id: string }>();
+  if (existingPayload) {
+    console.warn("[auto-recharge] payload already used");
+    return { ok: false };
+  }
+
+  const newBalance = account.deposit_balance + rechargeAmount;
+
+  await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE meteria402_accounts SET deposit_balance = ?, updated_at = ? WHERE id = ?`,
+    ).bind(newBalance, now, accountId),
+    env.DB.prepare(
+      `INSERT INTO meteria402_payments (id, account_id, kind, amount, currency, status, x402_payload_hash, tx_hash, payment_requirement_json, response_json, created_at, settled_at)
+       VALUES (?, ?, 'deposit', ?, 'USD', 'settled', ?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      paymentId,
+      accountId,
+      rechargeAmount,
+      payloadHash,
+      settlement.txHash ?? null,
+      paymentRequirementJson,
+      JSON.stringify(settlement.raw ?? {}),
+      now,
+      now,
+    ),
+    env.DB.prepare(
+      `INSERT INTO meteria402_ledger_entries (id, account_id, type, amount, currency, related_payment_id, created_at)
+       VALUES (?, ?, 'deposit_paid', ?, 'USD', ?, ?)`,
+    ).bind(makeId("led"), accountId, rechargeAmount, paymentId, now),
+  ]);
+
+  return { ok: true, rechargeAmount };
+}
+
 async function handleChatCompletions(
   request: Request,
   env: Env,
@@ -3209,6 +3317,7 @@ async function settleMeteredRequest(
 
   // Step 2: 尝试自动支付
   const autoPay = await tryAutoPayInvoice(env, accountId, cost, requirement);
+  let rechargeResult: { ok: true; rechargeAmount: number } | { ok: false } | undefined = undefined;
 
   if (autoPay.ok) {
     // 自动支付成功：invoice 直接 paid
@@ -3253,39 +3362,77 @@ async function settleMeteredRequest(
 
     await env.DB.batch(batch);
   } else {
-    // 挂账
-    await env.DB.batch([
-      env.DB.prepare(
-        `INSERT INTO meteria402_invoices
-         (id, account_id, request_id, status, amount_due, currency, payment_requirement_json, created_at)
-         VALUES (?, ?, ?, 'unpaid', ?, 'USD', ?, ?)`,
-      ).bind(
-        invoiceId,
-        accountId,
-        requestId,
-        cost,
-        JSON.stringify(requirement),
-        now,
-      ),
-      env.DB.prepare(
-        `UPDATE meteria402_accounts
-         SET active_request_count = MAX(0, active_request_count - 1),
-             unpaid_invoice_total = unpaid_invoice_total + ?,
-             updated_at = ?
-         WHERE id = ?`,
-      ).bind(cost, now, accountId),
-      env.DB.prepare(
-        `INSERT INTO meteria402_ledger_entries
-         (id, account_id, type, amount, currency, related_request_id, related_invoice_id, created_at)
-         VALUES (?, ?, 'invoice_created', ?, 'USD', ?, ?, ?)`,
-      ).bind(makeId("led"), accountId, cost, requestId, invoiceId, now),
-    ]);
+    // 尝试自动充值
+    rechargeResult = await tryAutopayRecharge(env, accountId, cost);
+    if (rechargeResult.ok) {
+      // 充值成功，用 excess deposit 支付 invoice
+      const ledgerId = makeId("led");
+      await env.DB.batch([
+        env.DB.prepare(
+          `INSERT INTO meteria402_invoices
+           (id, account_id, request_id, status, amount_due, currency, payment_requirement_json, created_at, paid_at)
+           VALUES (?, ?, ?, 'paid', ?, 'USD', ?, ?, ?)`,
+        ).bind(
+          invoiceId,
+          accountId,
+          requestId,
+          cost,
+          JSON.stringify(requirement),
+          now,
+          now,
+        ),
+        env.DB.prepare(
+          `UPDATE meteria402_accounts
+           SET active_request_count = MAX(0, active_request_count - 1),
+               deposit_balance = deposit_balance - ?,
+               updated_at = ?
+           WHERE id = ?`,
+        ).bind(cost, now, accountId),
+        env.DB.prepare(
+          `INSERT INTO meteria402_ledger_entries
+           (id, account_id, type, amount, currency, related_request_id, related_invoice_id, created_at)
+           VALUES (?, ?, 'invoice_paid', ?, 'USD', ?, ?, ?)`,
+        ).bind(ledgerId, accountId, cost, requestId, invoiceId, now),
+      ]);
+    } else {
+      // 挂账
+      await env.DB.batch([
+        env.DB.prepare(
+          `INSERT INTO meteria402_invoices
+           (id, account_id, request_id, status, amount_due, currency, payment_requirement_json, created_at)
+           VALUES (?, ?, ?, 'unpaid', ?, 'USD', ?, ?)`,
+        ).bind(
+          invoiceId,
+          accountId,
+          requestId,
+          cost,
+          JSON.stringify(requirement),
+          now,
+        ),
+        env.DB.prepare(
+          `UPDATE meteria402_accounts
+           SET active_request_count = MAX(0, active_request_count - 1),
+               unpaid_invoice_total = unpaid_invoice_total + ?,
+               updated_at = ?
+           WHERE id = ?`,
+        ).bind(cost, now, accountId),
+        env.DB.prepare(
+          `INSERT INTO meteria402_ledger_entries
+           (id, account_id, type, amount, currency, related_request_id, related_invoice_id, created_at)
+           VALUES (?, ?, 'invoice_created', ?, 'USD', ?, ?, ?)`,
+        ).bind(makeId("led"), accountId, cost, requestId, invoiceId, now),
+      ]);
+    }
   }
 
   return {
     invoiceId,
-    autoPaid: autoPay.ok,
-    autoPayMethod: autoPay.ok ? autoPay.method : undefined,
+    autoPaid: autoPay.ok || (rechargeResult?.ok ?? false),
+    autoPayMethod: autoPay.ok
+      ? autoPay.method
+      : rechargeResult?.ok
+        ? "autopay_recharge"
+        : undefined,
   };
 }
 

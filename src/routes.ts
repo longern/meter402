@@ -23,6 +23,7 @@ export type RouteHandlers = {
   handleDepositAutopayStart: IdHandler;
   handleDepositAutopayComplete: IdHandler;
   handleGetAccount: Handler;
+  handleUpdateAccount: Handler;
   handleListApiKeys: Handler;
   handleCreateApiKey: Handler;
   handleRevokeApiKey: IdHandler;
@@ -161,6 +162,9 @@ async function dispatchBillingRoute(
 
   if (method === "GET" && url.pathname === "/api/account") {
     return handlers.handleGetAccount(request, env);
+  }
+  if (method === "PATCH" && url.pathname === "/api/account") {
+    return handlers.handleUpdateAccount(request, env);
   }
   if (method === "GET" && url.pathname === "/api/api-keys") {
     return handlers.handleListApiKeys(request, env);

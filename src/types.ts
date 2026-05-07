@@ -32,6 +32,7 @@ export type Account = {
   active_request_count: number;
   concurrency_limit: number;
   min_deposit_required: number;
+  autopay_min_recharge_amount: number;
   refund_address: string | null;
 };
 
