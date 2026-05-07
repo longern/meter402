@@ -4,9 +4,19 @@ import {
   buildCoinbaseWalletLink,
   buildOkxWalletLink,
   readableError,
+  shortAddress,
 } from "./utils";
+import styles from "./LoginPage.module.css";
 
 const LOGIN_SUCCESS_REDIRECT_DELAY_MS = 500;
+
+function CheckIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M5 13l4 4L19 7" />
+    </svg>
+  );
+}
 
 export function LoginPage({ returnTo = "", onSessionChange = () => {} }) {
   const [hasWallet, setHasWallet] = useState(false);
@@ -14,6 +24,7 @@ export function LoginPage({ returnTo = "", onSessionChange = () => {} }) {
   const [isMobile, setIsMobile] = useState(false);
   const [scan, setScan] = useState(null);
   const [verificationQr, setVerificationQr] = useState("");
+  const [walletAddress, setWalletAddress] = useState("");
   const [identity, setIdentity] = useState(null);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
@@ -37,6 +48,15 @@ export function LoginPage({ returnTo = "", onSessionChange = () => {} }) {
   }, []);
 
   useEffect(() => {
+    if (!hasWallet) {
+      setWalletAddress("");
+      return undefined;
+    }
+    readConnectedWalletAddress().then(setWalletAddress, () => setWalletAddress(""));
+    return subscribeWalletAddress(setWalletAddress);
+  }, [hasWallet]);
+
+  useEffect(() => {
     if (!walletChecked || hasWallet) return undefined;
     startScanLogin();
     return () => closeLoginSocket();
@@ -47,7 +67,7 @@ export function LoginPage({ returnTo = "", onSessionChange = () => {} }) {
     setError("");
     setStatus("Waiting for wallet signature...");
     try {
-      const completed = await signLoginWithWallet("/api/login/challenge", "/api/login/complete");
+      const completed = await signLoginWithWallet("/api/login/challenge", "/api/login/complete", setWalletAddress);
       finishLogin(completed);
     } catch (error) {
       const message = readableError(error);
@@ -167,27 +187,39 @@ export function LoginPage({ returnTo = "", onSessionChange = () => {} }) {
   const isWalletOpen = scanStatus === "scanned" || scanStatus === "signing";
 
   return (
-    <main className="login-main">
-      <nav className="compact-nav">
-        <a className="brand" href="/">Meteria402</a>
-        <a href="/">Home</a>
-      </nav>
-
-      <section className="login-panel">
-        <div className="login-heading">
+    <main className={styles.loginMain}>
+      <section className={styles.loginPanel}>
+        <div className={styles.loginHeading}>
+          <a className={`${styles.walletLoginSite} ${styles.loginCardBrand}`} href="/">
+            <img src="/logo-transparent.png" alt="" />
+            <strong>Meteria402</strong>
+          </a>
           <h1>Sign in</h1>
           <p>Use your wallet</p>
         </div>
+        <hr className={styles.loginPanelDivider} />
 
-        <div className="login-step-viewport">
-          <div className="login-step-card forward">
-            <div className="login-authorization">
-              {hasWallet ? (
-                <div className="login-direct">
+        <div className={styles.loginStepViewport}>
+          <div className={`${styles.loginStepCard} ${styles.forward}`}>
+            <div className={styles.loginAuthorization}>
+              {identity ? (
+                <div className={styles.loginComplete}>
+                  <span className={styles.loginSuccessIcon}>
+                    <CheckIcon />
+                  </span>
+                  <h2>Signed in</h2>
+                  <dl>
+                    <dt>Owner</dt>
+                    <dd>{identity.owner}</dd>
+                  </dl>
+                </div>
+              ) : hasWallet ? (
+                <div className={styles.loginDirect}>
                   <h2>Wallet detected</h2>
                   <p>Sign with your wallet to open the console.</p>
-                  {error && <p className="login-error" role="alert">{error}</p>}
-                  <div className="login-actions">
+                  <WalletAddressLine address={walletAddress} />
+                  {error && <p className={styles.loginError} role="alert">{error}</p>}
+                  <div className={styles.loginActions}>
                     <button className="primary" type="button" disabled={busy} onClick={startDirectLogin}>
                       {busy ? "Signing..." : "Sign in"}
                     </button>
@@ -195,23 +227,23 @@ export function LoginPage({ returnTo = "", onSessionChange = () => {} }) {
                 </div>
               ) : (
                 <>
-                  <div className="login-authorization-header">
+                  <div className={styles.loginAuthorizationHeader}>
                     <h2>
-                      <span className="desktop-login-title">Scan with your wallet</span>
-                      <span className="mobile-login-title">Open in wallet</span>
+                      <span className={styles.desktopLoginTitle}>Scan with your wallet</span>
+                      <span className={styles.mobileLoginTitle}>Open in wallet</span>
                     </h2>
                   </div>
 
                   {!isMobile && (
-                    <div className="login-approval-option login-scan-option">
+                    <div className={`${styles.loginApprovalOption} ${styles.loginScanOption}`}>
                       {authExpired ? (
-                        <button className="login-qr-expired" type="button" onClick={startScanLogin} disabled={busy}>
+                        <button className={`${styles.loginQrExpired} text-button`} type="button" onClick={startScanLogin} disabled={busy}>
                           <span aria-hidden="true" />
                           <strong>QR expired</strong>
                           <small>{busy ? "Refreshing..." : "Click to refresh"}</small>
                         </button>
                       ) : isWalletOpen ? (
-                        <div className="login-scan-active" role="status">
+                        <div className={styles.loginScanActive} role="status">
                           <span aria-hidden="true" />
                           <strong>Wallet opened</strong>
                           <small>{scanStatus === "signing" ? "Confirm the signature in your wallet." : "Waiting for signature."}</small>
@@ -219,13 +251,13 @@ export function LoginPage({ returnTo = "", onSessionChange = () => {} }) {
                       ) : verificationQr ? (
                         <img src={verificationQr} alt="Wallet login QR code" />
                       ) : (
-                        <div className="login-qr-placeholder" aria-label="Preparing login" />
+                        <div className={styles.loginQrPlaceholder} aria-label="Preparing login" />
                       )}
                     </div>
                   )}
 
                   {isMobile && (
-                    <div className="login-mobile-approval">
+                    <div className={styles.loginMobileApproval}>
                       <div className="wallet-deeplink-actions" aria-label="Open in wallet app">
                         <a className="wallet-icon-link" href={verificationUrl ? buildCoinbaseWalletLink(verificationUrl) : undefined} aria-disabled={!verificationUrl} aria-label="Open in Coinbase Wallet">
                           <img src="/wallet-icons/coinbase-wallet.svg" alt="" />
@@ -237,24 +269,13 @@ export function LoginPage({ returnTo = "", onSessionChange = () => {} }) {
                     </div>
                   )}
 
-                  {error && <p className="login-error" role="alert">{error}</p>}
-                  {status && !error && <p className="status-line">{status}</p>}
-                  <div className="login-actions login-authorize-actions">
-                    <button className="secondary" type="button" onClick={startScanLogin} disabled={busy}>
-                      Refresh
-                    </button>
+                  <div
+                    className={`${styles.loginMessageSlot} ${error ? styles.hasError : status ? styles.hasStatus : ""}`}
+                    role={error ? "alert" : status ? "status" : undefined}
+                  >
+                    {error || status}
                   </div>
                 </>
-              )}
-
-              {identity && (
-                <div className="login-complete">
-                  <h2>Signed in</h2>
-                  <dl>
-                    <dt>Owner</dt>
-                    <dd>{identity.owner}</dd>
-                  </dl>
-                </div>
               )}
             </div>
           </div>
@@ -267,6 +288,7 @@ export function LoginPage({ returnTo = "", onSessionChange = () => {} }) {
 export function WalletLoginPage({ onSessionChange = () => {} }) {
   const requestId = new URLSearchParams(window.location.search).get("request_id") || "";
   const [hasWallet, setHasWallet] = useState(Boolean(window.ethereum));
+  const [walletAddress, setWalletAddress] = useState("");
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -283,6 +305,15 @@ export function WalletLoginPage({ onSessionChange = () => {} }) {
     }, 100);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (!hasWallet) {
+      setWalletAddress("");
+      return undefined;
+    }
+    readConnectedWalletAddress().then(setWalletAddress, () => setWalletAddress(""));
+    return subscribeWalletAddress(setWalletAddress);
+  }, [hasWallet]);
 
   useEffect(() => {
     if (!requestId) return;
@@ -318,6 +349,7 @@ export function WalletLoginPage({ onSessionChange = () => {} }) {
       const completed = await signLoginWithWallet(
         `/api/login/scan/${encodeURIComponent(requestId)}/challenge`,
         `/api/login/scan/${encodeURIComponent(requestId)}/approve`,
+        setWalletAddress,
       );
       const nextIdentity = {
         owner: completed.owner,
@@ -337,14 +369,14 @@ export function WalletLoginPage({ onSessionChange = () => {} }) {
   }
 
   return (
-    <main className="login-main">
+    <main className={styles.loginMain}>
       <nav className="compact-nav">
         <a className="brand" href="/">Meteria402</a>
         <a href="/login">Login</a>
       </nav>
-      <section className="login-panel">
-        <div className="login-heading">
-          <div className="wallet-login-site">
+      <section className={styles.loginPanel}>
+        <div className={styles.loginHeading}>
+          <div className={styles.walletLoginSite}>
             <img src="/logo-transparent.png" alt="" />
             <div>
               <strong>Meteria402</strong>
@@ -354,10 +386,10 @@ export function WalletLoginPage({ onSessionChange = () => {} }) {
           <h1>Wallet login</h1>
           <p>Sign in to the main site</p>
         </div>
-        <div className="login-step-viewport">
-          <div className="login-step-card forward">
-            <div className="login-direct">
-              <div className="wallet-login-safety" aria-label="Security reminder">
+        <div className={styles.loginStepViewport}>
+          <div className={`${styles.loginStepCard} ${styles.forward}`}>
+            <div className={styles.loginDirect}>
+              <div className={styles.walletLoginSafety} aria-label="Security reminder">
                 <strong>Security check</strong>
                 <ul>
                   <li>Confirm that this sign-in was initiated by you.</li>
@@ -365,8 +397,8 @@ export function WalletLoginPage({ onSessionChange = () => {} }) {
                   <li>Only sign if your wallet shows {window.location.host}.</li>
                 </ul>
               </div>
-              {error && <p className="login-error" role="alert">{error}</p>}
-              {status && !error && <p className="status-line">{status}</p>}
+              {error && <p className={styles.loginError} role="alert">{error}</p>}
+              {status && !error && <p className={styles.statusLine}>{status}</p>}
               {!hasWallet && (
                 <div className="wallet-deeplink-actions wallet-page-links" aria-label="Open in wallet app">
                   <a className="wallet-icon-link" href={buildCoinbaseWalletLink(window.location.href)} aria-label="Open in Coinbase Wallet">
@@ -377,15 +409,16 @@ export function WalletLoginPage({ onSessionChange = () => {} }) {
                   </a>
                 </div>
               )}
+              {hasWallet && <WalletAddressLine address={walletAddress} />}
               {hasWallet && (
-                <div className="login-actions">
+                <div className={styles.loginActions}>
                   <button className="primary" type="button" disabled={busy || !requestId} onClick={approve}>
                     {busy ? "Signing..." : "Sign in"}
                   </button>
                 </div>
               )}
               {identity && (
-                <dl className="login-result">
+                <dl className={styles.loginResult}>
                   <dt>Owner</dt>
                   <dd>{identity.owner}</dd>
                 </dl>
@@ -395,6 +428,15 @@ export function WalletLoginPage({ onSessionChange = () => {} }) {
         </div>
       </section>
     </main>
+  );
+}
+
+function WalletAddressLine({ address }) {
+  return (
+    <div className={styles.walletAddressLine}>
+      <span>Wallet</span>
+      <strong title={address || undefined}>{address ? shortAddress(address) : "Not connected"}</strong>
+    </div>
   );
 }
 
@@ -413,12 +455,13 @@ function parseSocketMessage(data) {
   return JSON.parse(data);
 }
 
-async function signLoginWithWallet(challengePath, completePath) {
+async function signLoginWithWallet(challengePath, completePath, onAddress = () => {}) {
   const provider = window.ethereum;
   if (!provider) throw new Error("Open this page in an Ethereum wallet browser.");
   const accounts = await provider.request({ method: "eth_requestAccounts" });
   const address = accounts?.[0];
   if (!address) throw new Error("No wallet account selected.");
+  onAddress(address);
   const challenge = await fetchJson(challengePath, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -434,6 +477,27 @@ async function signLoginWithWallet(challengePath, completePath) {
       signature,
     }),
   });
+}
+
+async function readConnectedWalletAddress() {
+  const provider = window.ethereum;
+  if (!provider) return "";
+  const accounts = await provider.request({ method: "eth_accounts" });
+  return accounts?.[0] || "";
+}
+
+function subscribeWalletAddress(setWalletAddress) {
+  const provider = window.ethereum;
+  if (!provider?.on) return undefined;
+  function handleAccountsChanged(accounts) {
+    setWalletAddress(accounts?.[0] || "");
+  }
+  provider.on("accountsChanged", handleAccountsChanged);
+  return () => {
+    if (provider.removeListener) {
+      provider.removeListener("accountsChanged", handleAccountsChanged);
+    }
+  };
 }
 
 async function signPersonalMessage(provider, address, message) {

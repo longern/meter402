@@ -431,7 +431,8 @@ async function handleCreateAuthRequest(request: Request, env: Env): Promise<Resp
 
   const returnOrigin = normalizeOptionalOrigin(body.returnOrigin ?? body.return_origin);
   const ttlSeconds = normalizeTtlSeconds(body.ttlSeconds ?? body.ttl_seconds);
-  const requestId = env.AUTOPAY_AUTH_SESSIONS.newUniqueId().toString();
+  const sessionId = env.AUTOPAY_AUTH_SESSIONS.newUniqueId();
+  const requestId = encodeDurableObjectId(sessionId.toString());
   const pollToken = randomToken(32);
   const eventToken = randomToken(32);
   const now = new Date();
@@ -465,7 +466,7 @@ async function handleCreateAuthRequest(request: Request, env: Env): Promise<Resp
     expiresAt: expiresAt.toISOString(),
   };
 
-  const stub = sessionStub(env, requestId);
+  const stub = env.AUTOPAY_AUTH_SESSIONS.get(sessionId);
   await stub.fetch("https://session/init", {
     method: "POST",
     headers: JSON_HEADERS,
@@ -514,11 +515,35 @@ function authRequestEvent(record: AuthRequestRecord, status: "pending" | "approv
 function sessionStub(env: Env, requestId: string): DurableObjectStub {
   let id: DurableObjectId;
   try {
-    id = env.AUTOPAY_AUTH_SESSIONS.idFromString(requestId);
+    id = env.AUTOPAY_AUTH_SESSIONS.idFromString(decodeDurableObjectId(requestId));
   } catch {
     throw new HttpError(400, "invalid_auth_request_id", "Authorization request ID is invalid.");
   }
   return env.AUTOPAY_AUTH_SESSIONS.get(id);
+}
+
+function encodeDurableObjectId(value: string): string {
+  if (!/^[0-9a-f]{64}$/i.test(value)) {
+    throw new HttpError(500, "invalid_durable_object_id", "Durable Object ID is invalid.");
+  }
+  let binary = "";
+  for (let index = 0; index < value.length; index += 2) {
+    binary += String.fromCharCode(Number.parseInt(value.slice(index, index + 2), 16));
+  }
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function decodeDurableObjectId(value: string): string {
+  if (!/^[A-Za-z0-9_-]{43}$/.test(value)) {
+    throw new HttpError(400, "invalid_auth_request_id", "Authorization request ID is invalid.");
+  }
+  const padded = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(44, "=");
+  const binary = atob(padded);
+  let hex = "";
+  for (let index = 0; index < binary.length; index += 1) {
+    hex += binary.charCodeAt(index).toString(16).padStart(2, "0");
+  }
+  return hex;
 }
 
 async function handlePay(request: Request, env: Env): Promise<Response> {

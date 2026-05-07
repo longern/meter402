@@ -2,6 +2,7 @@ import { useState, useRef } from "react";
 import QRCode from "qrcode";
 import CardSection from "../CardSection";
 import Modal from "../Modal";
+import { RefreshIcon } from "../icons";
 import {
   formatDateTime,
   shortAddress,
@@ -36,12 +37,21 @@ export default function AutopayView({
       <CardSection
         title="Pre-approvals"
         actions={
-          <div className="row">
-            <button className="primary" disabled={isBusy || capabilitiesLoading} onClick={loadCapabilities}>Refresh</button>
-            <button disabled={isBusy} className="primary" onClick={openCapCreate}>Create limit</button>
-          </div>
+          <button
+            className="icon-button plain"
+            type="button"
+            aria-label="Refresh autopay limits"
+            title="Refresh autopay limits"
+            disabled={isBusy || capabilitiesLoading}
+            onClick={loadCapabilities}
+          >
+            <RefreshIcon />
+          </button>
         }
       >
+        <div style={{ marginBottom: 12 }}>
+          <button disabled={isBusy} className="primary" onClick={openCapCreate}>Create limit</button>
+        </div>
         <p className="muted">Scoped autopay authorizations: amount limits, validity period, and remaining budget.</p>
 
         {capabilities.length ? (
@@ -112,7 +122,7 @@ export default function AutopayView({
           subtitle={
             capDialog.status === "done"
               ? "Your autopay limit has been saved and is now active."
-              : "Approve the limit in your wallet to finalize the setup."
+              : "Scan this QR code with your wallet app."
           }
           className="payment-modal"
           titleId="cap-title"
@@ -124,6 +134,7 @@ export default function AutopayView({
               ) : (
                 <div className="payment-qr-placeholder">Preparing QR</div>
               )}
+              <p className="wallet-qr-hint">Scan this QR code with your wallet app.</p>
             </div>
             <div className="cap-qr-mobile">
               <div className="wallet-row">
@@ -143,7 +154,7 @@ export default function AutopayView({
                   </>
                 )}
               </div>
-              <p className="wallet-mobile-fallback">or manually copy the link and open it in your wallet app browser.</p>
+              <p className="wallet-mobile-fallback">Open this link in your wallet app.</p>
               <div className="approval-link-box">
                 <div className="approval-link-header">
                   <span>Approval link</span>
@@ -163,28 +174,20 @@ export default function AutopayView({
                 <code>{capDialog.url || "Preparing link..."}</code>
               </div>
             </div>
-            <div>
-              <strong>
-                {capDialog.status === "done"
-                  ? "Done"
-                  : capDialog.status === "failed"
-                  ? "Failed"
-                  : "Waiting for wallet signature"}
-              </strong>
-              <p className="muted">
-                {capDialog.status === "done"
-                  ? "The pre-approval is now active."
-                  : capDialog.status === "failed"
-                  ? "Something went wrong. You can try creating the limit again."
-                  : "After approval, this page will complete the limit setup automatically."}
-              </p>
-              {capDialog.error && <p className="form-error">{capDialog.error}</p>}
-              <div className="wallet-row">
-                {(capDialog.status === "done" || capDialog.status === "failed") && (
+            {capDialog.status !== "waiting" && (
+              <div className="cap-approval-status">
+                <strong>{capDialog.status === "done" ? "Done" : "Failed"}</strong>
+                <p className="muted">
+                  {capDialog.status === "done"
+                    ? "The pre-approval is now active."
+                    : "Something went wrong. You can try creating the limit again."}
+                </p>
+                {capDialog.error && <p className="form-error">{capDialog.error}</p>}
+                <div className="wallet-row">
                   <button type="button" onClick={closeCapDialog}>Close</button>
-                )}
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </Modal>
       )}

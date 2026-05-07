@@ -1,7 +1,8 @@
 {
   "name": "Meteria402",
   "short_name": "Meteria402",
-  "description": "Anonymous, deposit-backed, OpenAI-compatible AI API billing with x402 payments.",
+  "description": "Deposit-backed AI API billing with x402 payments, OpenAI-compatible endpoints, usage invoices, and autopay.",
+  "categories": ["developer", "finance", "productivity"],
   "start_url": "/",
   "display": "standalone",
   "background_color": "#ffffff",

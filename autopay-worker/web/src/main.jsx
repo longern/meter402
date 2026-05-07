@@ -21,6 +21,7 @@ function App() {
   const [auditAuth, setAuditAuth] = useState([]);
   const [auditPay, setAuditPay] = useState([]);
   const [auditBusy, setAuditBusy] = useState(false);
+  const [autopayWalletAddress, setAutopayWalletAddress] = useState("");
 
   const [hasWallet, setHasWallet] = useState(false);
 
@@ -53,6 +54,9 @@ function App() {
             fetchJson("/api/capabilities"),
           ]);
           setAuthRequest(details);
+          if (details.status === "approved" || details.status === "denied") {
+            setResult(details.status);
+          }
           setAllowedOwners(capabilities.allowed_owner_addresses || []);
           setWalletStatus("Connect an owner wallet to continue.");
           autoConnectWallet();
@@ -88,6 +92,14 @@ function App() {
     loadAudit();
   }, [session, activeTab]);
 
+  useEffect(() => {
+    if (!session || requestId) return;
+    loadDashboardCapabilities(session.owner).catch((err) => {
+      setAutopayWalletAddress("");
+      setWalletStatus(readableErrorMessage(err));
+    });
+  }, [session]);
+
   async function checkSession() {
     setCheckingSession(true);
     try {
@@ -120,6 +132,11 @@ function App() {
     } finally {
       setAuditBusy(false);
     }
+  }
+
+  async function loadDashboardCapabilities(owner) {
+    const data = await fetchJson(`/api/capabilities?owner=${encodeURIComponent(owner)}`);
+    setAutopayWalletAddress(data.payer_address || "");
   }
 
   async function handleLogin() {
@@ -158,6 +175,7 @@ function App() {
       setSession(null);
       setAuditAuth([]);
       setAuditPay([]);
+      setAutopayWalletAddress("");
       setWalletStatus("Signed out.");
     } catch (err) {
       showError(err);
@@ -255,6 +273,7 @@ function App() {
   const isLogin = authRequest?.kind === "login";
   const loginApproved = isLogin && result === "approved";
   const authPage = Boolean(requestId);
+  const policyAsset = policy ? assetLabel(policy.asset, policy.network) : "";
 
   // Dashboard rendering helpers
   const renderDashboard = () => {
@@ -376,26 +395,33 @@ function App() {
 
     return (
       <>
-        <header>
-          <h1>Autopay Dashboard</h1>
-          <p>Manage your Meteria402 autopay authorizations and payments.</p>
-        </header>
-
-        <div className="content">
-          <section>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
-              <h2 style={{ margin: 0 }}>Wallet</h2>
-              <button className="secondary" style={{ padding: "6px 12px", fontSize: "13px" }} disabled={busy} onClick={() => handleLogout()}>
-                Sign Out
+        <div className="dashboard-topbar">
+          <div className="dashboard-topbar-inner">
+            <h1>Autopay</h1>
+            <div className="dashboard-account">
+              <span className="dashboard-address">{shortAddress(session.owner)}</span>
+              <button className="icon-button" type="button" aria-label="Sign out" disabled={busy} onClick={() => handleLogout()}>
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M10 6H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h4" />
+                  <path d="M14 8l4 4-4 4" />
+                  <path d="M18 12H9" />
+                </svg>
               </button>
             </div>
-            <div className="wallet-row">
-              <strong>{shortAddress(ownerAddress)}</strong>
-              <span className="badge signed-in">Signed in</span>
+          </div>
+        </div>
+
+        <div className="content">
+          <section className="dashboard-card autopay-wallet-card">
+            <div className="section-heading">
+              <h2>Autopay wallet</h2>
+              <span>Managed payer</span>
             </div>
+            <strong className="wallet-address-large">{autopayWalletAddress ? shortAddress(autopayWalletAddress) : "Not configured"}</strong>
+            {autopayWalletAddress && <p className="wallet-address-full">{autopayWalletAddress}</p>}
           </section>
 
-          <section>
+          <section className="dashboard-card">
             <div className="tabs">
               <button className={activeTab === "authorizations" ? "active" : ""} onClick={() => setActiveTab("authorizations")}>Authorizations</button>
               <button className={activeTab === "payments" ? "active" : ""} onClick={() => setActiveTab("payments")}>Payments</button>
@@ -404,43 +430,46 @@ function App() {
             {auditBusy && <div className="status">Loading...</div>}
 
             {activeTab === "authorizations" && (
-              <table className="audit-table">
-                <thead>
-                  <tr><th>Time</th><th>Kind</th><th>Status</th><th>Max Amount</th><th>Expires</th></tr>
-                </thead>
-                <tbody>
-                  {auditAuth.length === 0 && <tr><td colSpan="5" className="empty-cell">No authorizations yet.</td></tr>}
-                  {auditAuth.map((row) => (
-                    <tr key={row.id}>
-                      <td>{formatTimestamp(row.created_at)}</td>
-                      <td>{row.kind}</td>
-                      <td><span className={`status-badge ${row.status}`}>{row.status}</span></td>
-                      <td>{row.policy_max_single_amount || "-"}</td>
-                      <td>{formatTimestamp(row.expires_at)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="audit-list">
+                {auditAuth.length === 0 && <div className="empty-cell">No authorizations yet.</div>}
+                {auditAuth.map((row) => (
+                  <article className="audit-item" key={row.id}>
+                    <div className="audit-main">
+                      <div>
+                        <span className="audit-label">Max amount</span>
+                        <strong className="audit-amount">{formatAuthorizationAmount(row)}</strong>
+                      </div>
+                      <span className={`status-badge ${statusClassName(row.status)}`}>{row.status}</span>
+                    </div>
+                    <div className="audit-meta">
+                      <span>Origin {originHost(row.worker_origin) || "-"}</span>
+                      <span>Created {formatTimestamp(row.created_at)}</span>
+                      <span>Request expires {formatTimestamp(row.expires_at)}</span>
+                    </div>
+                  </article>
+                ))}
+              </div>
             )}
 
             {activeTab === "payments" && (
-              <table className="audit-table">
-                <thead>
-                  <tr><th>Time</th><th>Status</th><th>Amount</th><th>Currency</th><th>Resource</th></tr>
-                </thead>
-                <tbody>
-                  {auditPay.length === 0 && <tr><td colSpan="5" className="empty-cell">No payments yet.</td></tr>}
-                  {auditPay.map((row) => (
-                    <tr key={row.id}>
-                      <td>{formatTimestamp(row.created_at)}</td>
-                      <td><span className={`status-badge ${row.status}`}>{row.status}</span></td>
-                      <td>{row.amount_decimal || row.amount || "-"}</td>
-                      <td>{row.currency}</td>
-                      <td className="resource-cell">{row.resource_url || "-"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="audit-list">
+                {auditPay.length === 0 && <div className="empty-cell">No payments yet.</div>}
+                {auditPay.map((row) => (
+                  <article className="audit-item" key={row.id}>
+                    <div className="audit-main">
+                      <div>
+                        <span className="audit-label">Amount</span>
+                        <strong className="audit-amount">{formatPaymentAmount(row)}</strong>
+                      </div>
+                      <span className={`status-badge ${statusClassName(row.status)}`}>{row.status}</span>
+                    </div>
+                    <div className="audit-meta">
+                      <span>{formatTimestamp(row.created_at)}</span>
+                      <span className="resource-text">{row.resource_url || "No resource"}</span>
+                    </div>
+                  </article>
+                ))}
+              </div>
             )}
           </section>
         </div>
@@ -490,8 +519,25 @@ function App() {
       {!authPage ? renderDashboard() : (
         <>
           <header className={authPage ? "auth-topbar" : ""}>
-            <h1>{loginApproved ? "Login Approved" : isLogin ? "Confirm Login" : "Confirm Payment"}</h1>
-            <p>{loginApproved ? "You can return to Meteria402." : isLogin ? "Use your wallet" : "Review and sign this payment authorization."}</p>
+            {authPage && !loginApproved && (
+              <button className="auth-nav-button" type="button" aria-label="Go back" onClick={() => window.history.back()}>
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M15 6l-6 6 6 6" />
+                </svg>
+              </button>
+            )}
+            <div>
+              <h1>{loginApproved ? "Login Approved" : isLogin ? "Confirm Login" : "Autopay Authorization"}</h1>
+              <p>{loginApproved ? "You can return to Meteria402." : isLogin ? "Use your wallet" : "Review the spending limit before signing."}</p>
+            </div>
+            {authPage && !loginApproved && (
+              <span className="auth-shield" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                  <path d="M12 21s7-3.5 7-9V5l-7-3-7 3v7c0 5.5 7 9 7 9z" />
+                  <path d="M9 12l2 2 4-4" />
+                </svg>
+              </span>
+            )}
           </header>
 
           <div className="content">
@@ -544,6 +590,22 @@ function App() {
                   </div>
                 </div>
               </section>
+            ) : policy ? (
+              <section className="authorization-summary">
+                <div className="requester-card">
+                  <div className="requester-mark" aria-hidden="true">
+                    {requesterInitial(policy.requester)}
+                  </div>
+                  <div className="requester-copy">
+                    <h2>{policy.requester?.name || originHost(policy.requester?.origin) || "Requester"}</h2>
+                    <p>{policy.requester?.origin || "Requester origin unavailable"}</p>
+                    {policy.requester?.account && (
+                      <span className="requester-wallet">{policy.requester.account}</span>
+                    )}
+                  </div>
+                </div>
+                <p className="transparency-note">Requester identity is shown for transparency.</p>
+              </section>
             ) : (
               <section className="empty">
                 <h2>Payment Authorization</h2>
@@ -552,26 +614,57 @@ function App() {
             )}
 
             {!loginApproved && policy && (
-              <section>
-                <h2>Request</h2>
-                <dl>
-                  <dt>Status</dt><dd>{authRequest.status}</dd>
-                  <dt>Expires</dt><dd>{authRequest.expires_at}</dd>
-                  <dt>Network</dt><dd>{policy.network}</dd>
-                  <dt>Asset</dt><dd>{policy.asset}</dd>
-                  <dt>Max amount</dt><dd>{policy.maxSingleAmount}</dd>
-                  <dt>Policy valid before</dt><dd>{policy.validBefore}</dd>
-                  {policy.requester && (
-                    <>
-                      <dt>Requester</dt><dd>{policy.requester.name || policy.requester.origin}</dd>
-                      <dt>Requester origin</dt><dd>{policy.requester.origin}</dd>
-                      <dt>Requester wallet</dt><dd>{policy.requester.account}</dd>
-                    </>
-                  )}
-                  <dt>Origins</dt><dd>{policy.allowedOrigins.join(", ")}</dd>
-                  <dt>Recipients</dt><dd>{policy.allowedPayTo.join(", ")}</dd>
-                  <dt>Payment hash</dt><dd>{authRequest.payment_requirement_hash || "Not bound"}</dd>
-                </dl>
+              <section className="spending-panel">
+                <div className="budget-header">
+                  <span>Budget</span>
+                  <strong>{formatPolicyAmount(policy.totalBudget, policy)}</strong>
+                </div>
+                <div className="risk-list">
+                  <div className="risk-row">
+                    <span>Per payment</span>
+                    <strong>{formatPolicyAmount(policy.maxSingleAmount, policy)}</strong>
+                  </div>
+                  <div className="risk-row">
+                    <span>Valid until</span>
+                    <strong>{formatTimestamp(policy.validBefore)}</strong>
+                  </div>
+                  <div className="risk-row">
+                    <span>Network</span>
+                    <strong>{networkLabel(policy.network)}</strong>
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {!loginApproved && policy && (
+              <section className="scope-panel">
+                <h2>Payment Scope</h2>
+                <div className="scope-list">
+                  <div className="scope-row">
+                    <span>Can pay for</span>
+                    <strong>{formatList(policy.allowedOrigins, originHost)}</strong>
+                  </div>
+                  <div className="scope-row">
+                    <span>Pays to</span>
+                    <strong>{formatList(policy.allowedPayTo, shortAddress)}</strong>
+                  </div>
+                  <div className="scope-row">
+                    <span>Asset</span>
+                    <strong>{policyAsset}</strong>
+                  </div>
+                </div>
+                <details className="binding-details">
+                  <summary>
+                    <span>{authRequest.payment_requirement_hash ? "Bound to this payment request" : "Not bound to a specific payment request"}</span>
+                    <strong>{authRequest.payment_requirement_hash ? shortHash(authRequest.payment_requirement_hash) : "No hash"}</strong>
+                  </summary>
+                  {authRequest.payment_requirement_hash && <p>{authRequest.payment_requirement_hash}</p>}
+                </details>
+                <div className="wallet-state">
+                  <span>Owner wallet</span>
+                  <strong>{ownerAddress ? shortAddress(ownerAddress) : "Not connected"}</strong>
+                </div>
+                <div className="status">{walletStatus}</div>
               </section>
             )}
 
@@ -639,7 +732,7 @@ function App() {
               </section>
             )}
 
-            {!loginApproved && authRequest && !isLogin && (
+            {!loginApproved && authRequest && !isLogin && !policy && (
               <section>
                 <h2>Wallet</h2>
                 <dl>
@@ -658,9 +751,22 @@ function App() {
             </div>
           ) : authRequest && (
             <div className="actions">
-              <button className="danger" disabled={busy || Boolean(result)} onClick={() => denyAuthorization().catch(showError)}>Deny</button>
-              {!ownerAddress && <button disabled={busy} onClick={() => connectWallet().catch(showError)}>Connect</button>}
-              {ownerAddress && <button disabled={!Boolean(authRequest && ownerAddress && ownerAllowed && !busy && !result)} onClick={() => approveAuthorization().catch(showError)}>{isLogin ? "Sign in" : "Sign"}</button>}
+              {result === "approved" ? (
+                <div className="signed-action" role="status" aria-live="polite">
+                  <span className="signed-check" aria-hidden="true">
+                    <svg viewBox="0 0 24 24">
+                      <path d="M5 12.5l4.5 4.5L19 7" />
+                    </svg>
+                  </span>
+                  <span>Signed</span>
+                </div>
+              ) : (
+                <>
+                  <button className="danger" disabled={busy || Boolean(result)} onClick={() => denyAuthorization().catch(showError)}>Deny</button>
+                  {!ownerAddress && <button disabled={busy} onClick={() => connectWallet().catch(showError)}>Connect</button>}
+                  {ownerAddress && <button disabled={!Boolean(authRequest && ownerAddress && ownerAllowed && !busy && !result)} onClick={() => approveAuthorization().catch(showError)}>{isLogin ? "Sign in" : "Sign"}</button>}
+                </>
+              )}
             </div>
           )}
         </>
@@ -741,9 +847,98 @@ function shortAddress(value) {
   return `${value.slice(0, 5)}...${value.slice(-4)}`;
 }
 
+function shortCaipAccount(value) {
+  if (!value) return "";
+  const parts = String(value).split(":");
+  const address = parts[parts.length - 1] || "";
+  if (!address) return value;
+  return `${parts.slice(0, -1).join(":")}:${shortAddress(address)}`;
+}
+
+function shortHash(value) {
+  if (!value || value.length < 16) return value || "";
+  return `${value.slice(0, 6)}...${value.slice(-4)}`;
+}
+
 function networkLabel(value) {
   if (!value || value === "eip155:8453") return "Base";
+  if (value === "eip155:84532") return "Base Sepolia";
   return value;
+}
+
+function assetLabel(asset, network) {
+  const normalized = String(asset || "").toLowerCase();
+  if (
+    (network === "eip155:8453" && normalized === "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913") ||
+    (network === "eip155:84532" && normalized === "0x036cbd53842c5426634e7929541ec2318f3dcf7e")
+  ) {
+    return "USDC";
+  }
+  return shortAddress(asset);
+}
+
+function tokenDecimals(asset, network) {
+  return assetLabel(asset, network) === "USDC" ? 6 : 18;
+}
+
+function formatPolicyAmount(raw, policy) {
+  const symbol = assetLabel(policy.asset, policy.network);
+  const formatted = formatTokenAmount(raw, tokenDecimals(policy.asset, policy.network));
+  return `${formatted} ${symbol}`;
+}
+
+function formatAuthorizationAmount(row) {
+  if (!row.policy_max_single_amount) return "-";
+  const policy = {
+    asset: row.policy_asset,
+    network: row.policy_network,
+  };
+  return formatPolicyAmount(row.policy_max_single_amount, policy);
+}
+
+function formatPaymentAmount(row) {
+  const symbol = row.currency || assetLabel(row.asset, row.network);
+  if (!row.amount_decimal && !row.amount) return "-";
+  const amount = row.amount_decimal || formatTokenAmount(row.amount, tokenDecimals(row.asset, row.network));
+  return symbol ? `${amount} ${symbol}` : amount;
+}
+
+function statusClassName(value) {
+  return String(value || "").toLowerCase();
+}
+
+function formatTokenAmount(raw, decimals) {
+  try {
+    const amount = BigInt(raw);
+    const scale = 10n ** BigInt(decimals);
+    const whole = amount / scale;
+    const fraction = amount % scale;
+    if (fraction === 0n) return `${whole}.00`;
+    const fractionText = fraction.toString().padStart(decimals, "0").replace(/0+$/, "");
+    const padded = fractionText.length === 1 ? `${fractionText}0` : fractionText;
+    return `${whole}.${padded}`;
+  } catch {
+    return raw || "0";
+  }
+}
+
+function originHost(value) {
+  if (!value) return "";
+  try {
+    return new URL(value).host;
+  } catch {
+    return value;
+  }
+}
+
+function formatList(items, formatter) {
+  if (!Array.isArray(items) || items.length === 0) return "-";
+  return items.map((item) => formatter(item) || item).join(", ");
+}
+
+function requesterInitial(requester) {
+  const value = requester?.name || originHost(requester?.origin) || "R";
+  return value.trim().slice(0, 1).toUpperCase();
 }
 
 function formatTimestamp(value) {

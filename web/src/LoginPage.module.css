@@ -1,0 +1,653 @@
+.loginMain {
+  min-height: 100vh;
+  padding: 32px 28px 56px;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-rows: auto auto;
+  align-content: center;
+  background: #edf2f8;
+}
+
+.loginPanel {
+  --login-column-gap: 78px;
+  width: min(1120px, 100%);
+  min-height: 468px;
+  margin: 0 auto;
+  background: #fff;
+  border: 1px solid rgba(229, 231, 235, 0.72);
+  border-radius: 16px;
+  padding: 42px 48px;
+  box-shadow: 0 10px 34px rgba(15, 23, 42, 0.05);
+  box-sizing: border-box;
+  display: flex;
+  gap: calc(var(--login-column-gap) / 2);
+  align-items: stretch;
+}
+
+.loginPanel h1 {
+  margin-bottom: 20px;
+  font-size: 48px;
+  line-height: 1.04;
+  font-weight: 650;
+}
+
+.loginHeading {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+}
+
+.loginHeading p:last-child {
+  margin-bottom: 0;
+  color: #111827;
+  font-size: 18px;
+}
+
+.loginPanelDivider {
+  flex: 0 0 1px;
+  width: 1px;
+  height: 100%;
+  margin: 0;
+  border: 0;
+  align-self: center;
+  background: #e5e7eb;
+}
+
+.walletLoginSite {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 28px;
+  color: #111827;
+}
+
+.walletLoginSite img {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+}
+
+.walletLoginSite div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.walletLoginSite strong {
+  font-size: 16px;
+  font-weight: 750;
+}
+
+.walletLoginSite span {
+  color: #6b7280;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.loginCardBrand {
+  width: fit-content;
+  margin-bottom: 58px;
+  color: #111827;
+  text-decoration: none;
+}
+
+.loginCardBrand img {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+}
+
+.loginCardBrand strong {
+  font-size: 17px;
+}
+
+.loginStepViewport {
+  flex: 1 1 0;
+  min-width: 0;
+  display: grid;
+  align-items: center;
+  position: relative;
+  overflow: hidden;
+  min-height: 336px;
+}
+
+.loginStepCard {
+  width: 100%;
+  animation-duration: 260ms;
+  animation-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
+  animation-fill-mode: both;
+}
+
+.loginStepCard > form {
+  display: block;
+}
+
+.forward {
+  animation-name: login-slide-forward;
+}
+
+.back {
+  animation-name: login-slide-back;
+}
+
+@keyframes login-slide-forward {
+  from {
+    opacity: 0;
+    transform: translateX(28px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes login-slide-back {
+  from {
+    opacity: 0;
+    transform: translateX(-28px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.loginPanel label {
+  margin-top: 0;
+}
+
+.loginActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 24px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.loginActions button,
+.loginActions :global(.button-link) {
+  min-width: 108px;
+  text-align: center;
+}
+
+.loginAuthorization {
+  display: grid;
+  gap: 16px;
+}
+
+.loginDirect {
+  display: grid;
+  align-content: center;
+  gap: 12px;
+  min-height: 220px;
+}
+
+.loginDirect h2 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.loginDirect p {
+  margin: 0;
+}
+
+.walletAddressLine {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid #dbe7ef;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 13px;
+}
+
+.walletAddressLine span {
+  color: #64748b;
+  font-weight: 700;
+}
+
+.walletAddressLine strong {
+  min-width: 0;
+  color: #111827;
+  overflow-wrap: anywhere;
+  font:
+    13px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Consolas,
+    monospace;
+}
+
+.walletLoginSafety {
+  display: grid;
+  gap: 10px;
+  padding: 16px 18px;
+  border: 1px solid #dbe7ef;
+  border-left: 4px solid #0f766e;
+  border-radius: 8px;
+  background: #f8fbfb;
+  color: #1f2937;
+}
+
+.walletLoginSafety strong {
+  color: #0f172a;
+  font-size: 15px;
+  font-weight: 750;
+}
+
+.walletLoginSafety ul {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding-left: 18px;
+  color: #4b5563;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.walletLoginSafety li::marker {
+  color: #0f766e;
+}
+
+.loginAuthorizationHeader {
+  display: grid;
+  gap: 12px;
+  justify-items: center;
+  text-align: center;
+}
+
+.loginApprovalOption {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.loginScanOption {
+  justify-items: center;
+}
+
+.loginApprovalOption img,
+.loginQrExpired,
+.loginScanActive {
+  display: block;
+  width: min(100%, 176px);
+  height: auto;
+  aspect-ratio: 1;
+  border-radius: 6px;
+  justify-self: center;
+}
+
+.loginApprovalOption img {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+}
+
+.loginQrExpired {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  box-sizing: border-box;
+  padding: 16px;
+  border: 1px dashed #94a3b8;
+  background: #f8fafc;
+  color: #111827;
+  text-align: center;
+}
+
+.loginQrExpired:hover:not(:disabled),
+.loginQrExpired:focus-visible {
+  border-color: #047857;
+  background: #ecfdf5;
+}
+
+.loginQrExpired span {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border: 2px solid #047857;
+  border-radius: 999px;
+  color: #047857;
+}
+
+.loginQrExpired span::after {
+  content: "↻";
+  font-size: 25px;
+  font-weight: 700;
+  line-height: 1;
+  transform: translateY(-1px);
+}
+
+.loginQrExpired strong {
+  font-size: 14px;
+}
+
+.loginQrExpired small {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.loginScanActive {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  box-sizing: border-box;
+  padding: 16px;
+  border: 1px solid #bbf7d0;
+  background: #f0fdf4;
+  color: #064e3b;
+  text-align: center;
+}
+
+.loginScanActive span {
+  width: 42px;
+  height: 42px;
+  box-sizing: border-box;
+  border: 3px solid rgba(5, 150, 105, 0.18);
+  border-top-color: #059669;
+  border-radius: 999px;
+  animation: login-spin 820ms linear infinite;
+}
+
+.loginScanActive strong {
+  font-size: 14px;
+}
+
+.loginScanActive small {
+  color: #047857;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.loginQrPlaceholder {
+  width: min(100%, 176px);
+  height: auto;
+  aspect-ratio: 1;
+  display: grid;
+  gap: 10px;
+  place-items: center;
+  align-content: center;
+  box-sizing: border-box;
+  padding: 18px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 6px;
+  color: #64748b;
+  background: #f8fafc;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 700;
+  justify-self: center;
+}
+
+.loginQrPlaceholder::before {
+  content: "";
+  width: 26px;
+  height: 26px;
+  box-sizing: border-box;
+  border: 3px solid rgba(71, 85, 105, 0.18);
+  border-top-color: #047857;
+  border-radius: 999px;
+  animation: login-spin 820ms linear infinite;
+}
+
+@keyframes login-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.loginAuthorization h2 {
+  margin-bottom: 8px;
+  font-size: 18px;
+  line-height: 1.25;
+  font-weight: 650;
+}
+
+.mobileLoginTitle {
+  display: none;
+}
+
+.loginAuthorization p {
+  margin-bottom: 14px;
+}
+
+.loginMobileApproval {
+  display: none;
+}
+
+.loginComplete {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 10px;
+  min-height: 220px;
+  text-align: center;
+}
+
+.loginSuccessIcon {
+  width: 58px;
+  height: 58px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: #dcfce7;
+  color: #047857;
+}
+
+.loginSuccessIcon svg {
+  width: 34px;
+  height: 34px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.loginComplete h2 {
+  margin: 0;
+  font-size: 24px;
+}
+
+.loginComplete dl {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 8px 12px;
+  margin: 12px 0 0;
+}
+
+.loginComplete dt {
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.loginComplete dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font:
+    13px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Consolas,
+    monospace;
+}
+
+.loginResult {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px 12px;
+  margin: 8px 0 0;
+}
+
+.loginResult dt {
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.loginResult dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font:
+    13px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Consolas,
+    monospace;
+}
+
+.loginError {
+  margin: 14px 0 0;
+  color: #991b1b;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  padding: 12px 14px;
+  font-weight: 650;
+}
+
+.statusLine {
+  margin-top: 16px;
+  margin-bottom: 0;
+  color: #047857;
+  font-weight: 700;
+}
+
+.loginMessageSlot {
+  min-height: 44px;
+  box-sizing: border-box;
+  margin: 10px 0 0;
+  padding: 12px 14px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: transparent;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.hasError {
+  color: #991b1b;
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
+.hasStatus {
+  color: #047857;
+}
+
+@media (max-width: 860px) {
+  .loginPanel {
+    --login-column-gap: 44px;
+    padding: 36px 40px;
+  }
+
+  .loginPanel h1 {
+    font-size: 40px;
+  }
+}
+
+@media (max-width: 720px) {
+  .loginMain {
+    display: block;
+    min-height: 100vh;
+    min-height: 100svh;
+    padding: 18px 20px 24px;
+    background: #fff;
+  }
+
+  .loginPanel {
+    width: 100%;
+    min-height: auto;
+    display: block;
+    padding: 28px 0 0;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .loginPanelDivider {
+    display: none;
+  }
+
+  .loginCardBrand {
+    margin-bottom: 22px;
+  }
+
+  .loginPanel h1 {
+    font-size: 28px;
+  }
+
+  .walletLoginSite {
+    margin-bottom: 22px;
+  }
+
+  .loginHeading p:last-child {
+    font-size: 16px;
+  }
+
+  .walletLoginSafety {
+    padding: 14px 15px;
+  }
+
+  .loginActions {
+    justify-content: stretch;
+  }
+
+  .loginStepViewport {
+    min-height: 500px;
+    min-height: clamp(390px, calc(100svh - 292px), 500px);
+  }
+
+  .loginStepCard {
+    min-height: 0;
+  }
+
+  .loginStepCard > form {
+    min-height: 0;
+  }
+
+  .loginAuthorization {
+    grid-template-columns: 1fr;
+    align-content: center;
+  }
+
+  .desktopLoginTitle {
+    display: none;
+  }
+
+  .mobileLoginTitle {
+    display: inline;
+  }
+
+  .loginMobileApproval {
+    display: grid;
+    gap: 12px;
+  }
+
+  .loginMobileApproval button {
+    width: 100%;
+  }
+
+  .loginComplete {
+    min-height: 0;
+  }
+
+  .loginComplete dl {
+    grid-template-columns: 1fr;
+  }
+}
