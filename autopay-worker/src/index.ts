@@ -63,7 +63,7 @@ type AuthRequestRecord = {
   eventToken: string;
   status: "pending" | "approved" | "denied";
   kind: "payment" | "login";
-  workerOrigin: string;
+  authOrigin: string;
   policy?: AutopayCapability;
   paymentRequirementHash?: string;
   returnOrigin?: string;
@@ -192,7 +192,7 @@ export class AutopayAuthSession implements DurableObject {
         }
         const body = await readJsonObject(request);
         const authorization = await verifyAuthorization(request, this.env, body, {
-          expectedOrigin: record.workerOrigin,
+          expectedOrigin: record.authOrigin,
           requireCapability: record.kind === "payment",
         });
         if (authorization.authRequestId !== record.requestId) {
@@ -231,17 +231,18 @@ export class AutopayAuthSession implements DurableObject {
         try {
           await this.env.DB.prepare(
             `INSERT INTO autopay_authorizations
-             (id, request_id, kind, owner, worker_origin, policy_network, policy_asset, policy_max_single_amount, policy_valid_before, status, created_at, approved_at, expires_at, capability_hash)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', ?, ?, ?, ?)`
+             (id, request_id, kind, owner, requester_origin, policy_network, policy_asset, policy_max_single_amount, policy_total_budget, policy_valid_before, reserved_amount, status, created_at, approved_at, expires_at, capability_hash)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '0', 'approved', ?, ?, ?, ?)`
           ).bind(
             record.requestId,
             record.requestId,
             record.kind,
             record.owner,
-            record.workerOrigin,
+            authorization.capability?.requester?.origin ?? null,
             record.policy?.network ?? null,
             record.policy?.asset ?? null,
             record.policy?.maxSingleAmount ?? null,
+            authorization.capability?.totalBudget ?? null,
             record.policy?.validBefore ?? null,
             record.createdAt,
             record.approvedAt,
@@ -250,30 +251,6 @@ export class AutopayAuthSession implements DurableObject {
           ).run();
         } catch (err) {
           console.error("Failed to insert autopay_authorizations approved", err);
-        }
-
-        // ─── Budget tracking: register capability budget ───
-        if (capabilityHash) {
-          try {
-            const now = new Date().toISOString();
-            await this.env.DB.prepare(
-              `INSERT INTO autopay_capability_budgets (capability_hash, owner, total_budget, max_single_amount, spent_amount, valid_before, created_at)
-               VALUES (?, ?, ?, ?, '0', ?, ?)
-               ON CONFLICT(capability_hash) DO UPDATE SET
-                 total_budget = excluded.total_budget,
-                 max_single_amount = excluded.max_single_amount,
-                 valid_before = excluded.valid_before`
-            ).bind(
-              capabilityHash,
-              authorization.owner,
-              authorization.capability!.totalBudget,
-              authorization.capability!.maxSingleAmount,
-              authorization.capability!.validBefore,
-              now
-            ).run();
-          } catch (err) {
-            console.error("Failed to upsert autopay_capability_budgets", err);
-          }
         }
 
         return jsonResponse({
@@ -456,7 +433,7 @@ async function handleCreateAuthRequest(request: Request, env: Env): Promise<Resp
     eventToken,
     status: "pending",
     kind,
-    workerOrigin: publicOrigin,
+    authOrigin: publicOrigin,
     policy,
     paymentRequirementHash,
     returnOrigin,
@@ -560,18 +537,20 @@ async function handlePay(request: Request, env: Env): Promise<Response> {
   const selectedRequirement = selectRequirement(paymentRequired, authorization.capability);
   const requesterProof = await verifyRequesterProof(request, authorization.capability, bodyText, capabilityHash);
 
-  // ─── Budget check: atomic spent_amount + amount <= total_budget ───
+  // ─── Budget check: atomic reserved_amount + amount <= total_budget ───
   const budgetRow = await env.DB.prepare(
-    `SELECT total_budget, spent_amount FROM autopay_capability_budgets WHERE capability_hash = ?`
-  ).bind(capabilityHash).first<{ total_budget: string; spent_amount: string }>();
+    `SELECT policy_total_budget, reserved_amount
+     FROM autopay_authorizations
+     WHERE capability_hash = ? AND status = 'approved'`
+  ).bind(capabilityHash).first<{ policy_total_budget: string | null; reserved_amount: string }>();
 
-  if (!budgetRow) {
+  if (!budgetRow || !budgetRow.policy_total_budget) {
     throw new HttpError(403, "capability_not_registered", "Capability budget is not registered.");
   }
 
-  const newSpent = BigInt(budgetRow.spent_amount) + BigInt(selectedRequirement.amount);
-  const totalBudget = BigInt(budgetRow.total_budget);
-  if (newSpent > totalBudget) {
+  const newReserved = BigInt(budgetRow.reserved_amount) + BigInt(selectedRequirement.amount);
+  const totalBudget = BigInt(budgetRow.policy_total_budget);
+  if (newReserved > totalBudget) {
     throw new HttpError(402, "budget_exceeded", "This payment would exceed the autopay capability total budget.");
   }
 
@@ -598,10 +577,12 @@ async function handlePay(request: Request, env: Env): Promise<Response> {
 
   const { headers, paymentPayload } = await createPayment(env, paymentRequired, authorization, selectedRequirement);
 
-  // ─── Atomic budget deduction ───
+  // ─── Atomic budget reservation ───
   const updateResult = await env.DB.prepare(
-    `UPDATE autopay_capability_budgets SET spent_amount = ? WHERE capability_hash = ? AND spent_amount = ?`
-  ).bind(newSpent.toString(), capabilityHash, budgetRow.spent_amount).run();
+    `UPDATE autopay_authorizations
+     SET reserved_amount = ?
+     WHERE capability_hash = ? AND status = 'approved' AND reserved_amount = ?`
+  ).bind(newReserved.toString(), capabilityHash, budgetRow.reserved_amount).run();
 
   if (updateResult.meta.changes === 0) {
     throw new HttpError(409, "budget_race", "Capability budget was modified concurrently. Please retry.");
@@ -1750,7 +1731,7 @@ async function handleAuditAuthorizations(request: Request, env: Env): Promise<Re
     request_id: string;
     kind: string;
     owner: string | null;
-    worker_origin: string;
+    requester_origin: string | null;
     policy_network: string | null;
     policy_asset: string | null;
     policy_max_single_amount: string | null;
@@ -1782,17 +1763,21 @@ async function handleAuditPayments(request: Request, env: Env): Promise<Response
     throw new HttpError(403, "access_denied", "You can only view your own payment records.");
   }
 
-  let sql = `SELECT * FROM autopay_payments WHERE owner = ?`;
+  let sql = `SELECT p.*, a.requester_origin
+             FROM autopay_payments p
+             LEFT JOIN autopay_authorizations a
+               ON a.id = p.authorization_id OR a.capability_hash = p.capability_hash
+             WHERE p.owner = ?`;
   const params: (string | number)[] = [owner];
   if (statusParam) {
-    sql += ` AND status = ?`;
+    sql += ` AND p.status = ?`;
     params.push(statusParam);
   }
   if (authorizationId) {
-    sql += ` AND authorization_id = ?`;
+    sql += ` AND p.authorization_id = ?`;
     params.push(authorizationId);
   }
-  sql += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+  sql += ` ORDER BY p.created_at DESC LIMIT ? OFFSET ?`;
   params.push(limit, offset);
 
   const { results } = await env.DB.prepare(sql).bind(...params).all<{
@@ -1806,6 +1791,7 @@ async function handleAuditPayments(request: Request, env: Env): Promise<Response
     amount_decimal: string | null;
     currency: string;
     resource_url: string | null;
+    requester_origin: string | null;
     tx_hash: string | null;
     status: string;
     error_message: string | null;

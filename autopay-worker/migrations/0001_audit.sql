@@ -3,11 +3,13 @@ CREATE TABLE autopay_authorizations (
   request_id TEXT NOT NULL,
   kind TEXT NOT NULL CHECK (kind IN ('payment', 'login')),
   owner TEXT,
-  worker_origin TEXT NOT NULL,
+  requester_origin TEXT,
   policy_network TEXT,
   policy_asset TEXT,
   policy_max_single_amount TEXT,
+  policy_total_budget TEXT,
   policy_valid_before TEXT,
+  reserved_amount TEXT NOT NULL DEFAULT '0',
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'denied', 'expired')),
   created_at TEXT NOT NULL,
   approved_at TEXT,
@@ -19,6 +21,7 @@ CREATE INDEX idx_autopay_authorizations_owner ON autopay_authorizations(owner);
 CREATE INDEX idx_autopay_authorizations_status ON autopay_authorizations(status);
 CREATE INDEX idx_autopay_authorizations_created ON autopay_authorizations(created_at);
 CREATE INDEX idx_autopay_authorizations_capability ON autopay_authorizations(capability_hash);
+CREATE INDEX idx_autopay_authorizations_requester_origin ON autopay_authorizations(requester_origin);
 
 CREATE TABLE autopay_payments (
   id TEXT PRIMARY KEY,
@@ -61,16 +64,3 @@ CREATE TABLE autopay_sessions (
 
 CREATE INDEX idx_autopay_sessions_token ON autopay_sessions(token);
 CREATE INDEX idx_autopay_sessions_owner ON autopay_sessions(owner);
-
-CREATE TABLE autopay_capability_budgets (
-  capability_hash TEXT PRIMARY KEY,
-  owner TEXT NOT NULL,
-  total_budget TEXT NOT NULL,
-  max_single_amount TEXT NOT NULL,
-  spent_amount TEXT NOT NULL DEFAULT '0',
-  valid_before TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
-
-CREATE INDEX idx_autopay_capability_budgets_owner ON autopay_capability_budgets(owner);
-CREATE INDEX idx_autopay_capability_budgets_valid_before ON autopay_capability_budgets(valid_before);

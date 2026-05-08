@@ -442,9 +442,9 @@ function App() {
                       <span className={`status-badge ${statusClassName(row.status)}`}>{row.status}</span>
                     </div>
                     <div className="audit-meta">
-                      <span>Origin {originHost(row.worker_origin) || "-"}</span>
+                      <span>Origin {originHost(row.requester_origin) || "-"}</span>
                       <span>Created {formatTimestamp(row.created_at)}</span>
-                      <span>Request expires {formatTimestamp(row.expires_at)}</span>
+                      <span>Valid until {formatTimestamp(row.policy_valid_before)}</span>
                     </div>
                   </article>
                 ))}
@@ -458,14 +458,13 @@ function App() {
                   <article className="audit-item" key={row.id}>
                     <div className="audit-main">
                       <div>
-                        <span className="audit-label">Amount</span>
                         <strong className="audit-amount">{formatPaymentAmount(row)}</strong>
                       </div>
                       <span className={`status-badge ${statusClassName(row.status)}`}>{row.status}</span>
                     </div>
                     <div className="audit-meta">
+                      <span>{originHost(row.requester_origin) || "-"}</span>
                       <span>{formatTimestamp(row.created_at)}</span>
-                      <span className="resource-text">{row.resource_url || "No resource"}</span>
                     </div>
                   </article>
                 ))}
@@ -899,12 +898,21 @@ function formatAuthorizationAmount(row) {
 function formatPaymentAmount(row) {
   const symbol = row.currency || assetLabel(row.asset, row.network);
   if (!row.amount_decimal && !row.amount) return "-";
-  const amount = row.amount_decimal || formatTokenAmount(row.amount, tokenDecimals(row.asset, row.network));
+  const amount = row.amount_decimal
+    ? trimDecimalZeros(row.amount_decimal)
+    : formatTokenAmount(row.amount, tokenDecimals(row.asset, row.network));
   return symbol ? `${amount} ${symbol}` : amount;
 }
 
 function statusClassName(value) {
   return String(value || "").toLowerCase();
+}
+
+function trimDecimalZeros(value) {
+  const text = String(value || "");
+  if (!text.includes(".")) return text;
+  const trimmed = text.replace(/(\.\d*?[1-9])0+$/, "$1").replace(/\.0+$/, "");
+  return trimmed || "0";
 }
 
 function formatTokenAmount(raw, decimals) {
