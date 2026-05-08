@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS meteria402_accounts (
   active_request_count INTEGER NOT NULL DEFAULT 0,
   concurrency_limit INTEGER NOT NULL DEFAULT 1,
   min_deposit_required INTEGER NOT NULL DEFAULT 0,
+  autopay_min_recharge_amount INTEGER NOT NULL DEFAULT 10000,
   refund_address TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -31,6 +32,7 @@ CREATE INDEX IF NOT EXISTS idx_meteria402_api_keys_expires_at ON meteria402_api_
 CREATE TABLE IF NOT EXISTS meteria402_requests (
   id TEXT PRIMARY KEY,
   account_id TEXT NOT NULL REFERENCES meteria402_accounts(id) ON DELETE CASCADE,
+  api_key_id TEXT REFERENCES meteria402_api_keys(id) ON DELETE SET NULL,
   status TEXT NOT NULL,
   model TEXT,
   stream INTEGER NOT NULL DEFAULT 0,
@@ -46,6 +48,7 @@ CREATE TABLE IF NOT EXISTS meteria402_requests (
 );
 
 CREATE INDEX IF NOT EXISTS idx_meteria402_requests_account_id ON meteria402_requests(account_id);
+CREATE INDEX IF NOT EXISTS idx_meteria402_requests_api_key_id ON meteria402_requests(api_key_id);
 CREATE INDEX IF NOT EXISTS idx_meteria402_requests_status ON meteria402_requests(status);
 
 CREATE TABLE IF NOT EXISTS meteria402_invoices (
@@ -104,6 +107,26 @@ CREATE TABLE IF NOT EXISTS meteria402_autopay_requests (
 CREATE INDEX IF NOT EXISTS idx_meteria402_autopay_requests_payment_id ON meteria402_autopay_requests(payment_id);
 CREATE INDEX IF NOT EXISTS idx_meteria402_autopay_requests_account_id ON meteria402_autopay_requests(account_id);
 CREATE INDEX IF NOT EXISTS idx_meteria402_autopay_requests_status ON meteria402_autopay_requests(status);
+
+CREATE TABLE IF NOT EXISTS meteria402_autopay_capabilities (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES meteria402_accounts(id) ON DELETE CASCADE,
+  owner_address TEXT NOT NULL,
+  autopay_url TEXT NOT NULL,
+  siwe_message TEXT NOT NULL,
+  siwe_signature TEXT NOT NULL,
+  capability_json TEXT NOT NULL,
+  max_single_amount INTEGER NOT NULL,
+  total_budget INTEGER NOT NULL,
+  spent_amount INTEGER NOT NULL DEFAULT 0,
+  valid_before TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  revoked_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_meteria402_autopay_capabilities_account_id ON meteria402_autopay_capabilities(account_id);
+CREATE INDEX IF NOT EXISTS idx_meteria402_autopay_capabilities_valid_before ON meteria402_autopay_capabilities(valid_before);
+CREATE INDEX IF NOT EXISTS idx_meteria402_autopay_capabilities_revoked_at ON meteria402_autopay_capabilities(revoked_at);
 
 CREATE TABLE IF NOT EXISTS meteria402_ledger_entries (
   id TEXT PRIMARY KEY,

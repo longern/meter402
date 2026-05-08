@@ -1,50 +1,38 @@
-import {
-getAccountByOwner
-} from "./accounts";
-import {
-createApiKey,
-randomApiKeyName
-} from "./api-keys";
+import { getAccountByOwner } from "./accounts";
+import { createApiKey, randomApiKeyName } from "./api-keys";
 import { normalizeAutopayUrl } from "./autopay";
-import { makeId,sha256Hex } from "./crypto";
+import { makeId, sha256Hex } from "./crypto";
 import {
-errorResponse,
-HttpError,
-jsonResponse,
-readJsonObject,
-requireString
+  errorResponse,
+  HttpError,
+  jsonResponse,
+  readJsonObject,
+  requireString,
 } from "./http";
+import { formatMoney, parseMoney, parsePositiveInt } from "./money";
+import { readOptionalSession } from "./session";
 import {
-formatMoney,
-parseMoney,
-parsePositiveInt,
-} from "./money";
-import {
-readOptionalSession
-} from "./session";
-import {
-signDepositIntent,
-signDepositQuote,
-verifyDepositAutopayState,
-verifyDepositIntent,
-verifyDepositQuote
+  signDepositIntent,
+  signDepositQuote,
+  verifyDepositAutopayState,
+  verifyDepositIntent,
+  verifyDepositQuote,
 } from "./signed-state";
-import type {
-DepositIntentState,
-DepositQuoteState,
-Env
-} from "./types";
+import type { DepositIntentState, DepositQuoteState, Env } from "./types";
 import {
-createPaymentRequirement,
-createPaymentRequirementFromValues,
-normalizeEvmAddress,
-paymentCurrencyFromRequirement,
-settlementErrorExtra,
-verifyPayment,
-verifyTxHash
+  createPaymentRequirement,
+  createPaymentRequirementFromValues,
+  normalizeEvmAddress,
+  paymentCurrencyFromRequirement,
+  settlementErrorExtra,
+  verifyPayment,
+  verifyTxHash,
 } from "./x402";
 
-import { completeAutopayForDepositQuote,startAutopayForDepositQuote } from "./billing-autopay-handlers";
+import {
+  completeAutopayForDepositQuote,
+  startAutopayForDepositQuote,
+} from "./billing-autopay-handlers";
 
 export async function handleDepositQuote(
   request: Request,
@@ -451,8 +439,8 @@ export async function handleDepositSettle(
   await env.DB.batch([
     env.DB.prepare(
       `INSERT INTO meteria402_accounts
-       (id, status, owner_address, autopay_url, deposit_balance, unpaid_invoice_total, active_request_count, concurrency_limit, min_deposit_required, refund_address, created_at, updated_at)
-       VALUES (?, 'active', ?, ?, ?, 0, 0, ?, ?, ?, ?, ?)`,
+       (id, status, owner_address, autopay_url, deposit_balance, unpaid_invoice_total, active_request_count, concurrency_limit, min_deposit_required, refund_address, autopay_min_recharge_amount, created_at, updated_at)
+       VALUES (?, 'active', ?, ?, ?, 0, 0, ?, ?, ?, 10000, ?, ?)`,
     ).bind(
       accountId,
       ownerAddress,
@@ -503,7 +491,14 @@ export async function handleDepositSettle(
     env.DB.prepare(
       `INSERT INTO meteria402_ledger_entries (id, account_id, type, amount, currency, related_payment_id, created_at)
        VALUES (?, ?, 'deposit_paid', ?, ?, ?, ?)`,
-    ).bind(makeId("led"), accountId, quote.amount, paymentCurrency, paymentId, now),
+    ).bind(
+      makeId("led"),
+      accountId,
+      quote.amount,
+      paymentCurrency,
+      paymentId,
+      now,
+    ),
   ]);
 
   return jsonResponse({
@@ -562,9 +557,11 @@ function depositQuoteFromIntent(
   const accept = requirement.accepts[0];
   if (
     (intent.network && accept.network !== intent.network) ||
-    (intent.asset && accept.asset.toLowerCase() !== intent.asset.toLowerCase()) ||
+    (intent.asset &&
+      accept.asset.toLowerCase() !== intent.asset.toLowerCase()) ||
     (intent.token_amount && accept.amount !== intent.token_amount) ||
-    (intent.pay_to && accept.payTo.toLowerCase() !== intent.pay_to.toLowerCase())
+    (intent.pay_to &&
+      accept.payTo.toLowerCase() !== intent.pay_to.toLowerCase())
   ) {
     throw new HttpError(
       400,
@@ -633,7 +630,11 @@ export async function handleDepositAutopayComplete(
       "Payment ID does not match the autopay state.",
     );
   }
-  const result = await completeAutopayForDepositQuote(env, request, autopayState);
+  const result = await completeAutopayForDepositQuote(
+    env,
+    request,
+    autopayState,
+  );
   if (result.status !== "approved") return jsonResponse(result);
 
   const settleRequest = new Request(

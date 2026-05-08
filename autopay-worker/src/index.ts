@@ -900,11 +900,6 @@ async function verifyRequesterProof(
   if (accountHeader !== requester.account) {
     throw new HttpError(403, "requester_mismatch", "Requester account does not match the autopay capability.");
   }
-  const originHeader = request.headers.get("x-requester-origin");
-  if (originHeader && new URL(originHeader).origin !== requester.origin) {
-    throw new HttpError(403, "requester_origin_mismatch", "Requester origin does not match the autopay capability.");
-  }
-
   const { network, address } = parseRequesterAccount(requester.account);
   const issuedAt = requireUintHeader(request, "x-requester-issued-at");
   const expiresAt = requireUintHeader(request, "x-requester-expires-at");
@@ -1025,7 +1020,7 @@ function inferPolicyFromPaymentRequirement(env: Env, paymentRequired: PaymentReq
   }
   const requirement = selectCheapestExactRequirement(paymentRequired);
   return {
-    allowedOrigins: [getResourceOrigin(paymentRequired)],
+    allowedOrigins: [],
     allowedPayTo: [getAddress(requirement.payTo)],
     network: requirement.network as Network,
     asset: getAddress(requirement.asset),
@@ -1036,7 +1031,7 @@ function inferPolicyFromPaymentRequirement(env: Env, paymentRequired: PaymentReq
 }
 
 function selectRequirement(paymentRequired: PaymentRequired, capability: AutopayCapability): PaymentRequirements {
-  const matches = paymentRequired.accepts.filter((requirement) => requirementAllowed(paymentRequired, requirement, capability));
+  const matches = paymentRequired.accepts.filter((requirement) => requirementAllowed(requirement, capability));
   if (matches.length === 0) {
     throw new HttpError(402, "payment_not_allowed", "No payment requirement is allowed by SIWE capability.");
   }
@@ -1064,11 +1059,10 @@ function validateCapabilityTime(capability: AutopayCapability, now: Date): void 
   }
 }
 
-function requirementAllowed(paymentRequired: PaymentRequired, requirement: PaymentRequirements, capability: AutopayCapability): boolean {
+function requirementAllowed(requirement: PaymentRequirements, capability: AutopayCapability): boolean {
   if (requirement.scheme !== "exact") return false;
   if (requirement.network !== capability.network) return false;
   if (normalizeAddress(requirement.asset) !== normalizeAddress(capability.asset)) return false;
-  if (!capability.allowedOrigins.includes(getResourceOrigin(paymentRequired))) return false;
   if (!capability.allowedPayTo.map(normalizeAddress).includes(normalizeAddress(requirement.payTo))) return false;
   if (BigInt(requirement.amount) > BigInt(capability.maxSingleAmount)) return false;
   return true;
@@ -1100,14 +1094,6 @@ async function parsePaymentRequiredResponse(response: Response): Promise<Payment
     throw new HttpError(400, "invalid_402_response", "402 response body is not valid JSON.");
   }
   return normalizePaymentRequired((body as Record<string, unknown>)?.paymentRequired ?? (body as Record<string, unknown>)?.payment_required ?? body);
-}
-
-function getResourceOrigin(paymentRequired: PaymentRequired): string {
-  try {
-    return new URL(paymentRequired.resource.url).origin;
-  } catch {
-    throw new HttpError(400, "invalid_resource_url", "Payment resource URL is invalid.");
-  }
 }
 
 function getAllowedOwners(env: Env): Address[] {

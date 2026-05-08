@@ -518,16 +518,24 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
         method: "POST",
         body: "{}",
       });
+      if (started.status === "settled") {
+        show(started);
+        await Promise.all([loadAccount(), loadInvoices()]);
+        return;
+      }
       show({
         message: "Open the payment link in your wallet, then this page will wait for settlement.",
         ...started,
       });
       openAuthorization(started.verification_uri_complete);
-      await waitForAutopayAuthorization(
+      const result = await waitForAutopayAuthorization(
         `/api/invoices/${encodeURIComponent(invoice.id)}/pay/autopay/complete`,
         { payment_id: started.payment_id },
         started.websocket_uri_complete,
       );
+      if (result?.status === "settled") {
+        await Promise.all([loadAccount(), loadInvoices()]);
+      }
     });
   }
 

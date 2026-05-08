@@ -1,54 +1,65 @@
 import {
-getAccount,
-requireAccountFromSession,
-requirePaymentAccountAutopayUrl
+  getAccount,
+  requireAccountFromSession,
+  requirePaymentAccountAutopayUrl,
 } from "./accounts";
 import { normalizeAutopayUrl } from "./autopay";
+import { BASE_MAINNET, BASE_USDC, JSON_HEADERS } from "./constants";
+import { makeId, sha256Hex } from "./crypto";
 import {
-BASE_MAINNET,
-BASE_USDC,
-JSON_HEADERS,
-} from "./constants";
-import { makeId,sha256Hex } from "./crypto";
-import {
-errorResponse,
-HttpError,
-jsonResponse,
-paymentRequiredResponse,
-readJsonObject,
-requireString
+  errorResponse,
+  HttpError,
+  jsonResponse,
+  paymentRequiredResponse,
+  readJsonObject,
+  requireString,
 } from "./http";
+import { formatMoney, parseMoney } from "./money";
 import {
-formatMoney,
-parseMoney
-} from "./money";
-import {
-hashAutopayCapability,
-requesterMetadata,
-signedAutopayHeaders,
+  hashAutopayCapability,
+  requesterMetadata,
+  signedAutopayHeaders,
 } from "./requester-proof";
-import {
-signDepositAutopayState,
-verifyDepositQuote
-} from "./signed-state";
+import { signDepositAutopayState, verifyDepositQuote } from "./signed-state";
 import type {
-AutopayRequestRow,
-DepositAutopayState,
-DepositQuoteState,
-Env,
-PaymentRequirement
+  AutopayRequestRow,
+  DepositAutopayState,
+  DepositQuoteState,
+  Env,
+  PaymentRequirement,
 } from "./types";
 import {
-createPaymentRequirement,
-createPaymentRequirementFromValues,
-normalizeEvmAddress,
-paymentCurrencyFromRequirement,
-requireRecipientAddress,
-settlementErrorExtra,
-verifyPayment,
-x402AmountFromMicroUsd
+  createPaymentRequirement,
+  createPaymentRequirementFromValues,
+  normalizeEvmAddress,
+  paymentCurrencyFromRequirement,
+  requireRecipientAddress,
+  settlementErrorExtra,
+  verifyPayment,
+  x402AmountFromMicroUsd,
 } from "./x402";
 
+type AutopayPaymentResult = {
+  status: "approved";
+  payment_id: string;
+  autopay_request_id?: string;
+  payment_payload: unknown;
+  selected_requirement?: unknown;
+  capability_used?: boolean;
+  capability_id?: string;
+  capability_amount?: number;
+};
+
+type AutopayPendingResult = Record<string, unknown> & {
+  status: string;
+  payment_id: string;
+  autopay_request_id?: string;
+};
+
+type CapabilityBudgetCharge = {
+  id: string;
+  amount: number;
+};
 
 export async function handleInvoicePayQuote(
   request: Request,
@@ -77,24 +88,41 @@ export async function handleInvoicePayQuote(
   }
 
   const paymentId = makeId("pay");
+  const minRechargeAmount = account.autopay_min_recharge_amount || 0;
+  const rechargeNeededForDepositFloor =
+    Math.max(0, account.min_deposit_required - account.deposit_balance) +
+    invoice.amount_due;
+  const paymentKind =
+    minRechargeAmount > invoice.amount_due ||
+    rechargeNeededForDepositFloor > invoice.amount_due
+      ? "deposit"
+      : "invoice";
+  const paymentAmount =
+    paymentKind === "deposit"
+      ? Math.max(minRechargeAmount, rechargeNeededForDepositFloor)
+      : invoice.amount_due;
   const requirement = createPaymentRequirement(request, env, {
-    kind: "invoice",
-    id: invoice.id,
-    amount: invoice.amount_due,
-    description: `Meteria402 invoice ${invoice.id}`,
+    kind: paymentKind,
+    id: paymentKind === "deposit" ? paymentId : invoice.id,
+    amount: paymentAmount,
+    description:
+      paymentKind === "deposit"
+        ? `Meteria402 recharge for invoice ${invoice.id}`
+        : `Meteria402 invoice ${invoice.id}`,
   });
   const paymentCurrency = paymentCurrencyFromRequirement(requirement);
 
   await env.DB.prepare(
     `INSERT INTO meteria402_payments
      (id, account_id, invoice_id, kind, amount, currency, status, payment_requirement_json)
-     VALUES (?, ?, ?, 'invoice', ?, ?, 'pending', ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`,
   )
     .bind(
       paymentId,
       account.id,
       invoice.id,
-      invoice.amount_due,
+      paymentKind,
+      paymentAmount,
       paymentCurrency,
       JSON.stringify(requirement),
     )
@@ -123,18 +151,15 @@ export async function handleInvoicePaySettle(
     typeof body.dev_proof === "string" ? body.dev_proof : undefined;
 
   const payment = await env.DB.prepare(
-    `SELECT p.id, p.amount, p.status, p.payment_requirement_json, i.status AS invoice_status
+    `SELECT p.id, p.kind
      FROM meteria402_payments p
      JOIN meteria402_invoices i ON i.id = p.invoice_id
-     WHERE p.id = ? AND p.invoice_id = ? AND p.account_id = ? AND p.kind = 'invoice'`,
+     WHERE p.id = ? AND p.invoice_id = ? AND p.account_id = ? AND p.kind IN ('invoice', 'deposit')`,
   )
     .bind(paymentId, invoiceId, account.id)
     .first<{
       id: string;
-      amount: number;
-      status: string;
-      payment_requirement_json: string;
-      invoice_status: string;
+      kind: string;
     }>();
 
   if (!payment) {
@@ -144,88 +169,28 @@ export async function handleInvoicePaySettle(
       "Payment quote was not found.",
     );
   }
-  if (payment.status === "settled") {
-    return errorResponse(
-      409,
-      "payment_already_settled",
-      "This invoice payment has already been settled.",
+
+  if (payment.kind === "deposit") {
+    const recharge = await settleRechargePaymentForInvoice(
+      env,
+      account.id,
+      invoiceId,
+      paymentId,
+      paymentPayload,
+      devProof,
     );
-  }
-  if (payment.invoice_status !== "unpaid") {
-    return errorResponse(
-      409,
-      "invoice_not_payable",
-      "Only unpaid invoices can be paid.",
-    );
+    return jsonResponse(recharge.body, { status: recharge.status });
   }
 
-  const settlement = await verifyPayment(
+  const settlement = await settleInvoicePayment(
     env,
-    payment.payment_requirement_json,
+    account.id,
+    invoiceId,
+    paymentId,
     paymentPayload,
     devProof,
   );
-  if (!settlement.ok) {
-    return errorResponse(
-      402,
-      "payment_required",
-      settlement.message,
-      settlementErrorExtra(settlement),
-    );
-  }
-
-  const now = new Date().toISOString();
-  const payloadHash = await sha256Hex(
-    JSON.stringify(
-      paymentPayload ?? { dev_proof: devProof, payment_id: paymentId },
-    ),
-  );
-  const paymentCurrency = paymentCurrencyFromRequirement(
-    JSON.parse(payment.payment_requirement_json) as PaymentRequirement,
-  );
-
-  await env.DB.batch([
-    env.DB.prepare(
-      `UPDATE meteria402_payments
-       SET status = 'settled', x402_payload_hash = ?, tx_hash = ?, response_json = ?, settled_at = ?
-       WHERE id = ? AND status = 'pending'`,
-    ).bind(
-      payloadHash,
-      settlement.txHash ?? null,
-      JSON.stringify(settlement.raw ?? {}),
-      now,
-      paymentId,
-    ),
-    env.DB.prepare(
-      `UPDATE meteria402_invoices
-       SET status = 'paid', paid_at = ?
-       WHERE id = ? AND account_id = ? AND status = 'unpaid'`,
-    ).bind(now, invoiceId, account.id),
-    env.DB.prepare(
-      `UPDATE meteria402_accounts
-       SET unpaid_invoice_total = MAX(0, unpaid_invoice_total - ?), updated_at = ?
-       WHERE id = ?`,
-    ).bind(payment.amount, now, account.id),
-    env.DB.prepare(
-      `INSERT INTO meteria402_ledger_entries (id, account_id, type, amount, currency, related_invoice_id, related_payment_id, created_at)
-       VALUES (?, ?, 'invoice_paid', ?, ?, ?, ?, ?)`,
-    ).bind(
-      makeId("led"),
-      account.id,
-      payment.amount,
-      paymentCurrency,
-      invoiceId,
-      paymentId,
-      now,
-    ),
-  ]);
-
-  return jsonResponse({
-    invoice_id: invoiceId,
-    payment_id: paymentId,
-    status: "paid",
-    amount: formatMoney(payment.amount),
-  });
+  return jsonResponse(settlement.body, { status: settlement.status });
 }
 
 export async function handleInvoiceAutopayStart(
@@ -236,12 +201,17 @@ export async function handleInvoiceAutopayStart(
   const account = await requireAccountFromSession(request, env);
 
   const invoice = await env.DB.prepare(
-    `SELECT id, amount_due, status
+    `SELECT id, amount_due, currency, status
      FROM meteria402_invoices
      WHERE id = ? AND account_id = ?`,
   )
     .bind(invoiceId, account.id)
-    .first<{ id: string; amount_due: number; status: string }>();
+    .first<{
+      id: string;
+      amount_due: number;
+      currency: string;
+      status: string;
+    }>();
 
   if (!invoice) {
     return errorResponse(404, "invoice_not_found", "Invoice was not found.");
@@ -254,39 +224,105 @@ export async function handleInvoiceAutopayStart(
     );
   }
 
+  const depositPayment = await payInvoiceFromExcessDeposit(
+    env,
+    account.id,
+    invoice.id,
+    invoice.amount_due,
+    invoice.currency,
+  );
+  if (depositPayment.ok) {
+    return jsonResponse({
+      invoice_id: invoice.id,
+      status: "settled",
+      payment_method: "excess_deposit",
+      amount: formatMoney(invoice.amount_due),
+    });
+  }
+
   const paymentId = makeId("pay");
+  const minRechargeAmount = account.autopay_min_recharge_amount || 0;
+  const rechargeNeededForDepositFloor =
+    Math.max(0, account.min_deposit_required - account.deposit_balance) +
+    invoice.amount_due;
+  const paymentKind =
+    minRechargeAmount > invoice.amount_due ||
+    rechargeNeededForDepositFloor > invoice.amount_due
+      ? "deposit"
+      : "invoice";
+  const paymentAmount =
+    paymentKind === "deposit"
+      ? Math.max(minRechargeAmount, rechargeNeededForDepositFloor)
+      : invoice.amount_due;
   const requirement = createPaymentRequirement(request, env, {
-    kind: "invoice",
-    id: invoice.id,
-    amount: invoice.amount_due,
-    description: `Meteria402 invoice ${invoice.id}`,
+    kind: paymentKind,
+    id: paymentKind === "deposit" ? paymentId : invoice.id,
+    amount: paymentAmount,
+    description:
+      paymentKind === "deposit"
+        ? `Meteria402 recharge for invoice ${invoice.id}`
+        : `Meteria402 invoice ${invoice.id}`,
   });
   const paymentCurrency = paymentCurrencyFromRequirement(requirement);
 
   await env.DB.prepare(
     `INSERT INTO meteria402_payments
      (id, account_id, invoice_id, kind, amount, currency, status, payment_requirement_json)
-     VALUES (?, ?, ?, 'invoice', ?, ?, 'pending', ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`,
   )
     .bind(
       paymentId,
       account.id,
       invoice.id,
-      invoice.amount_due,
+      paymentKind,
+      paymentAmount,
       paymentCurrency,
       JSON.stringify(requirement),
     )
     .run();
 
-  return startAutopayForPayment(request, env, {
+  const start = await startAutopayForPayment(request, env, {
     id: paymentId,
     account_id: account.id,
     invoice_id: invoice.id,
-    kind: "invoice",
-    amount: invoice.amount_due,
+    kind: paymentKind,
+    amount: paymentAmount,
     status: "pending",
     payment_requirement_json: JSON.stringify(requirement),
   });
+  if (start.status !== "approved") {
+    return jsonResponse(start, { status: 201 });
+  }
+
+  const settlement =
+    paymentKind === "deposit"
+      ? await settleRechargePaymentForInvoice(
+          env,
+          account.id,
+          invoice.id,
+          paymentId,
+          start.payment_payload,
+          undefined,
+          capabilityBudgetCharge(start),
+        )
+      : await settleInvoicePayment(
+          env,
+          account.id,
+          invoice.id,
+          paymentId,
+          start.payment_payload,
+          undefined,
+          capabilityBudgetCharge(start),
+        );
+  return jsonResponse(
+    {
+      status: settlement.ok ? "settled" : "settle_failed",
+      autopay_status: start.status,
+      capability_used: start.capability_used === true,
+      settlement: settlement.body,
+    },
+    { status: settlement.status },
+  );
 }
 
 export async function handleInvoiceAutopayComplete(
@@ -299,12 +335,12 @@ export async function handleInvoiceAutopayComplete(
   const body = await readJsonObject(request);
   const paymentId = requireString(body.payment_id, "payment_id");
   const payment = await env.DB.prepare(
-    `SELECT id
+    `SELECT id, kind
      FROM meteria402_payments
-     WHERE id = ? AND invoice_id = ? AND account_id = ? AND kind = 'invoice'`,
+     WHERE id = ? AND invoice_id = ? AND account_id = ? AND kind IN ('invoice', 'deposit')`,
   )
     .bind(paymentId, invoiceId, account.id)
-    .first<{ id: string }>();
+    .first<{ id: string; kind: string }>();
   if (!payment) {
     return errorResponse(
       404,
@@ -316,36 +352,48 @@ export async function handleInvoiceAutopayComplete(
   const result = await completeAutopayForPayment(env, request, paymentId);
   if (result.status !== "approved") return jsonResponse(result);
 
-  const settleRequest = new Request(
-    new URL(`/api/invoices/${invoiceId}/pay/settle`, request.url),
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: request.headers.get("authorization") || "",
+  if (payment.kind === "deposit") {
+    const recharge = await settleRechargePaymentForInvoice(
+      env,
+      account.id,
+      invoiceId,
+      paymentId,
+      result.payment_payload,
+      undefined,
+      capabilityBudgetCharge(result),
+    );
+    if (recharge.ok) {
+      await markAutopaySettled(env, result.autopay_request_id);
+    }
+    return jsonResponse(
+      {
+        status: recharge.ok ? "settled" : "settle_failed",
+        autopay_status: result.status,
+        settlement: recharge.body,
       },
-      body: JSON.stringify({
-        payment_id: paymentId,
-        payment_payload: result.payment_payload,
-      }),
-    },
-  );
-  const settleResponse = await handleInvoicePaySettle(
-    settleRequest,
+      { status: recharge.status },
+    );
+  }
+
+  const invoiceSettlement = await settleInvoicePayment(
     env,
+    account.id,
     invoiceId,
+    paymentId,
+    result.payment_payload,
+    undefined,
+    capabilityBudgetCharge(result),
   );
-  if (settleResponse.ok) {
+  if (invoiceSettlement.ok) {
     await markAutopaySettled(env, result.autopay_request_id);
   }
-  const settlement = await settleResponse.json().catch(() => null);
   return jsonResponse(
     {
-      status: settleResponse.ok ? "settled" : "settle_failed",
+      status: invoiceSettlement.ok ? "settled" : "settle_failed",
       autopay_status: result.status,
-      settlement,
+      settlement: invoiceSettlement.body,
     },
-    { status: settleResponse.status },
+    { status: invoiceSettlement.status },
   );
 }
 
@@ -361,7 +409,7 @@ async function startAutopayForPayment(
     status: string;
     payment_requirement_json: string;
   },
-): Promise<Response> {
+): Promise<AutopayPaymentResult | AutopayPendingResult> {
   // Try to use an existing autopay capability first
   if (payment.account_id) {
     const capabilityPayload = await tryAutopayWithCapability(
@@ -371,26 +419,16 @@ async function startAutopayForPayment(
       payment.amount,
     );
     if (capabilityPayload) {
-      // Store the capability-based payment result for later settlement
-      await env.DB.prepare(
-        `UPDATE meteria402_payments
-         SET status = 'capability_ready', response_json = ?
-         WHERE id = ?`,
-      )
-        .bind(JSON.stringify(capabilityPayload), payment.id)
-        .run();
-
-      return jsonResponse(
-        {
-          payment_id: payment.id,
-          invoice_id: payment.invoice_id,
-          status: "approved",
-          payment_payload: capabilityPayload.payment_payload,
-          headers: capabilityPayload.headers,
-          capability_used: true,
-        },
-        { status: 200 },
-      );
+      return {
+        payment_id: payment.id,
+        invoice_id: payment.invoice_id,
+        status: "approved",
+        payment_payload: capabilityPayload.payment_payload,
+        selected_requirement: capabilityPayload.headers,
+        capability_used: true,
+        capability_id: capabilityPayload.capability_id,
+        capability_amount: capabilityPayload.capability_amount,
+      };
     }
   }
 
@@ -421,7 +459,7 @@ async function startAutopayForPayment(
     unknown
   > | null;
   if (!response.ok || !body) {
-    return errorResponse(
+    throw new HttpError(
       response.status || 502,
       "autopay_request_failed",
       "Autopay authorization request could not be created.",
@@ -458,22 +496,19 @@ async function startAutopayForPayment(
     )
     .run();
 
-  return jsonResponse(
-    {
-      id: autopayRecordId,
-      payment_id: payment.id,
-      invoice_id: payment.invoice_id,
-      status: "pending",
-      verification_uri_complete: verificationUriComplete,
-      websocket_uri_complete:
-        typeof body.websocket_uri_complete === "string"
-          ? body.websocket_uri_complete
-          : undefined,
-      expires_in: body.expires_in,
-      interval: body.interval,
-    },
-    { status: 201 },
-  );
+  return {
+    id: autopayRecordId,
+    payment_id: payment.id,
+    invoice_id: payment.invoice_id,
+    status: "pending",
+    verification_uri_complete: verificationUriComplete,
+    websocket_uri_complete:
+      typeof body.websocket_uri_complete === "string"
+        ? body.websocket_uri_complete
+        : undefined,
+    expires_in: body.expires_in,
+    interval: body.interval,
+  };
 }
 
 export async function startAutopayForDepositQuote(
@@ -556,40 +591,7 @@ async function completeAutopayForPayment(
   env: Env,
   request: Request,
   paymentId: string,
-): Promise<
-  Record<string, unknown> & {
-    status: string;
-    autopay_request_id?: string;
-    payment_payload?: unknown;
-  }
-> {
-  // Check if a capability-based payment was already prepared
-  const capabilityPayment = await env.DB.prepare(
-    `SELECT status, response_json
-     FROM meteria402_payments
-     WHERE id = ? AND status = 'capability_ready'`,
-  )
-    .bind(paymentId)
-    .first<{ status: string; response_json: string }>();
-
-  if (capabilityPayment) {
-    try {
-      const parsed = JSON.parse(capabilityPayment.response_json) as {
-        payment_payload: unknown;
-        headers: Record<string, string>;
-      };
-      return {
-        status: "approved",
-        payment_id: paymentId,
-        payment_payload: parsed.payment_payload,
-        selected_requirement: parsed.headers,
-        capability_used: true,
-      };
-    } catch {
-      // Fall through to normal flow if parsing fails
-    }
-  }
-
+): Promise<AutopayPaymentResult | AutopayPendingResult> {
   const record = await env.DB.prepare(
     `SELECT id, payment_id, account_id, invoice_id, autopay_url, autopay_request_id, poll_token, status, verification_uri_complete
      FROM meteria402_autopay_requests
@@ -844,6 +846,445 @@ export async function fetchAutopayPayerAddress(
   > | null;
   if (!response.ok || !body) return null;
   return typeof body.payer_address === "string" ? body.payer_address : null;
+}
+
+async function payInvoiceFromExcessDeposit(
+  env: Env,
+  accountId: string,
+  invoiceId: string,
+  amount: number,
+  currency: string,
+): Promise<{ ok: true } | { ok: false }> {
+  const account = await getAccount(env, accountId);
+  if (!account) return { ok: false };
+  const excess = account.deposit_balance - account.min_deposit_required;
+  if (excess < amount) return { ok: false };
+
+  const now = new Date().toISOString();
+  const result = await env.DB.prepare(
+    `UPDATE meteria402_invoices
+     SET status = 'paid', paid_at = ?
+     WHERE id = ? AND account_id = ? AND status = 'unpaid'`,
+  )
+    .bind(now, invoiceId, accountId)
+    .run();
+  if (result.meta.changes === 0) return { ok: false };
+
+  await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE meteria402_accounts
+       SET deposit_balance = deposit_balance - ?,
+           unpaid_invoice_total = MAX(0, unpaid_invoice_total - ?),
+           updated_at = ?
+       WHERE id = ?`,
+    ).bind(amount, amount, now, accountId),
+    env.DB.prepare(
+      `INSERT INTO meteria402_ledger_entries
+       (id, account_id, type, amount, currency, related_invoice_id, created_at)
+       VALUES (?, ?, 'invoice_paid', ?, ?, ?, ?)`,
+    ).bind(makeId("led"), accountId, amount, currency, invoiceId, now),
+  ]);
+
+  return { ok: true };
+}
+
+async function claimPaymentForSettlement(
+  env: Env,
+  paymentId: string,
+): Promise<{ ok: true } | { ok: false; status: string | null }> {
+  const claimed = await env.DB.prepare(
+    `UPDATE meteria402_payments
+     SET status = 'settling'
+     WHERE id = ? AND status = 'pending'`,
+  )
+    .bind(paymentId)
+    .run();
+  if (claimed.meta.changes > 0) return { ok: true };
+
+  const current = await env.DB.prepare(
+    `SELECT status FROM meteria402_payments WHERE id = ?`,
+  )
+    .bind(paymentId)
+    .first<{ status: string }>();
+  return { ok: false, status: current?.status ?? null };
+}
+
+function capabilityBudgetCharge(
+  result: AutopayPaymentResult | AutopayPendingResult,
+): CapabilityBudgetCharge | undefined {
+  const candidate = result as Partial<AutopayPaymentResult>;
+  if (
+    candidate.capability_used === true &&
+    typeof candidate.capability_id === "string" &&
+    typeof candidate.capability_amount === "number"
+  ) {
+    return { id: candidate.capability_id, amount: candidate.capability_amount };
+  }
+  return undefined;
+}
+
+function deductCapabilityBudgetStatement(
+  env: Env,
+  charge: CapabilityBudgetCharge,
+): D1PreparedStatement {
+  return env.DB.prepare(
+    `UPDATE meteria402_autopay_capabilities
+     SET spent_amount = spent_amount + ?
+     WHERE id = ?
+       AND revoked_at IS NULL
+       AND (spent_amount + ?) <= total_budget`,
+  ).bind(charge.amount, charge.id, charge.amount);
+}
+
+async function settleInvoicePayment(
+  env: Env,
+  accountId: string,
+  invoiceId: string,
+  paymentId: string,
+  paymentPayload: unknown,
+  devProof?: string,
+  capabilityCharge?: CapabilityBudgetCharge,
+): Promise<{ ok: boolean; status: number; body: Record<string, unknown> }> {
+  const payment = await env.DB.prepare(
+    `SELECT p.id, p.amount, p.currency, p.status, p.payment_requirement_json, i.status AS invoice_status
+     FROM meteria402_payments p
+     JOIN meteria402_invoices i ON i.id = p.invoice_id
+     WHERE p.id = ? AND p.invoice_id = ? AND p.account_id = ? AND p.kind = 'invoice'`,
+  )
+    .bind(paymentId, invoiceId, accountId)
+    .first<{
+      id: string;
+      amount: number;
+      currency: string;
+      status: string;
+      payment_requirement_json: string;
+      invoice_status: string;
+    }>();
+  if (!payment) {
+    return {
+      ok: false,
+      status: 404,
+      body: {
+        error: "payment_not_found",
+        message: "Payment quote was not found.",
+      },
+    };
+  }
+  if (payment.status === "settled" && payment.invoice_status === "paid") {
+    return {
+      ok: true,
+      status: 200,
+      body: {
+        invoice_id: invoiceId,
+        payment_id: paymentId,
+        status: "paid",
+        amount: formatMoney(payment.amount),
+      },
+    };
+  }
+  if (payment.invoice_status !== "unpaid") {
+    return {
+      ok: false,
+      status: 409,
+      body: {
+        error: "invoice_not_payable",
+        message: "Only unpaid invoices can be paid.",
+      },
+    };
+  }
+
+  const claim = await claimPaymentForSettlement(env, paymentId);
+  if (!claim.ok) {
+    return {
+      ok: false,
+      status: 409,
+      body: {
+        invoice_id: invoiceId,
+        payment_id: paymentId,
+        status: "payment_not_settleable",
+        payment_status: claim.status,
+      },
+    };
+  }
+
+  const settlement = await verifyPayment(
+    env,
+    payment.payment_requirement_json,
+    paymentPayload,
+    devProof,
+  );
+  if (!settlement.ok) {
+    await env.DB.prepare(
+      `UPDATE meteria402_payments
+       SET status = 'verification_failed', response_json = ?
+       WHERE id = ? AND status = 'settling'`,
+    )
+      .bind(
+        JSON.stringify(settlement.raw ?? { error: settlement.message }),
+        paymentId,
+      )
+      .run();
+    return {
+      ok: false,
+      status: 402,
+      body: {
+        invoice_id: invoiceId,
+        payment_id: paymentId,
+        status: "payment_required",
+        error: settlement.message,
+        ...settlementErrorExtra(settlement),
+      },
+    };
+  }
+
+  const now = new Date().toISOString();
+  const payloadHash = await sha256Hex(
+    JSON.stringify(
+      paymentPayload ?? { dev_proof: devProof, payment_id: paymentId },
+    ),
+  );
+  const batch: D1PreparedStatement[] = [
+    env.DB.prepare(
+      `UPDATE meteria402_payments
+       SET status = 'settled', x402_payload_hash = ?, tx_hash = ?, response_json = ?, settled_at = ?
+       WHERE id = ? AND status = 'settling'`,
+    ).bind(
+      payloadHash,
+      settlement.txHash ?? null,
+      JSON.stringify(settlement.raw ?? {}),
+      now,
+      paymentId,
+    ),
+    env.DB.prepare(
+      `UPDATE meteria402_invoices
+       SET status = 'paid', paid_at = ?
+       WHERE id = ? AND account_id = ? AND status = 'unpaid'`,
+    ).bind(now, invoiceId, accountId),
+    env.DB.prepare(
+      `UPDATE meteria402_accounts
+       SET unpaid_invoice_total = MAX(0, unpaid_invoice_total - ?), updated_at = ?
+       WHERE id = ?`,
+    ).bind(payment.amount, now, accountId),
+    env.DB.prepare(
+      `INSERT INTO meteria402_ledger_entries
+       (id, account_id, type, amount, currency, related_invoice_id, related_payment_id, created_at)
+       VALUES (?, ?, 'invoice_paid', ?, ?, ?, ?, ?)`,
+    ).bind(
+      makeId("led"),
+      accountId,
+      payment.amount,
+      payment.currency,
+      invoiceId,
+      paymentId,
+      now,
+    ),
+  ];
+  if (capabilityCharge) {
+    batch.push(deductCapabilityBudgetStatement(env, capabilityCharge));
+  }
+  await env.DB.batch(batch);
+
+  return {
+    ok: true,
+    status: 200,
+    body: {
+      invoice_id: invoiceId,
+      payment_id: paymentId,
+      status: "paid",
+      amount: formatMoney(payment.amount),
+    },
+  };
+}
+
+async function settleRechargePaymentForInvoice(
+  env: Env,
+  accountId: string,
+  invoiceId: string,
+  paymentId: string,
+  paymentPayload: unknown,
+  devProof?: string,
+  capabilityCharge?: CapabilityBudgetCharge,
+): Promise<{ ok: boolean; status: number; body: Record<string, unknown> }> {
+  const payment = await env.DB.prepare(
+    `SELECT id, amount, currency, status, payment_requirement_json
+     FROM meteria402_payments
+     WHERE id = ? AND account_id = ? AND invoice_id = ? AND kind = 'deposit'`,
+  )
+    .bind(paymentId, accountId, invoiceId)
+    .first<{
+      id: string;
+      amount: number;
+      currency: string;
+      status: string;
+      payment_requirement_json: string;
+    }>();
+  if (!payment) {
+    return {
+      ok: false,
+      status: 404,
+      body: {
+        error: "payment_not_found",
+        message: "Recharge payment was not found.",
+      },
+    };
+  }
+  if (payment.status === "settled") {
+    const invoice = await env.DB.prepare(
+      `SELECT amount_due, currency, status FROM meteria402_invoices WHERE id = ? AND account_id = ?`,
+    )
+      .bind(invoiceId, accountId)
+      .first<{ amount_due: number; currency: string; status: string }>();
+    if (invoice?.status === "paid") {
+      return {
+        ok: true,
+        status: 200,
+        body: {
+          invoice_id: invoiceId,
+          payment_id: paymentId,
+          status: "paid",
+        },
+      };
+    }
+    const paid = invoice
+      ? await payInvoiceFromExcessDeposit(
+          env,
+          accountId,
+          invoiceId,
+          invoice.amount_due,
+          invoice.currency,
+        )
+      : { ok: false };
+    return {
+      ok: paid.ok,
+      status: paid.ok ? 200 : 409,
+      body: {
+        invoice_id: invoiceId,
+        payment_id: paymentId,
+        status: paid.ok ? "paid" : "unpaid",
+      },
+    };
+  }
+  const claim = await claimPaymentForSettlement(env, paymentId);
+  if (!claim.ok) {
+    return {
+      ok: false,
+      status: 409,
+      body: {
+        invoice_id: invoiceId,
+        payment_id: paymentId,
+        status: "payment_not_settleable",
+        payment_status: claim.status,
+      },
+    };
+  }
+
+  const settlement = await verifyPayment(
+    env,
+    payment.payment_requirement_json,
+    paymentPayload,
+    devProof,
+  );
+  if (!settlement.ok) {
+    await env.DB.prepare(
+      `UPDATE meteria402_payments
+       SET status = 'verification_failed', response_json = ?
+       WHERE id = ? AND status = 'settling'`,
+    )
+      .bind(
+        JSON.stringify(settlement.raw ?? { error: settlement.message }),
+        paymentId,
+      )
+      .run();
+    return {
+      ok: false,
+      status: 402,
+      body: {
+        invoice_id: invoiceId,
+        payment_id: paymentId,
+        status: "payment_required",
+        error: settlement.message,
+        ...settlementErrorExtra(settlement),
+      },
+    };
+  }
+
+  const now = new Date().toISOString();
+  const payloadHash = await sha256Hex(
+    JSON.stringify(
+      paymentPayload ?? { dev_proof: devProof, payment_id: paymentId },
+    ),
+  );
+  const batch: D1PreparedStatement[] = [
+    env.DB.prepare(
+      `UPDATE meteria402_payments
+       SET status = 'settled', x402_payload_hash = ?, tx_hash = ?, response_json = ?, settled_at = ?
+       WHERE id = ? AND status = 'settling'`,
+    ).bind(
+      payloadHash,
+      settlement.txHash ?? null,
+      JSON.stringify(settlement.raw ?? {}),
+      now,
+      paymentId,
+    ),
+    env.DB.prepare(
+      `UPDATE meteria402_accounts
+       SET deposit_balance = deposit_balance + ?, updated_at = ?
+       WHERE id = ?`,
+    ).bind(payment.amount, now, accountId),
+    env.DB.prepare(
+      `INSERT INTO meteria402_ledger_entries
+       (id, account_id, type, amount, currency, related_invoice_id, related_payment_id, created_at)
+       VALUES (?, ?, 'deposit_paid', ?, ?, ?, ?, ?)`,
+    ).bind(
+      makeId("led"),
+      accountId,
+      payment.amount,
+      payment.currency,
+      invoiceId,
+      paymentId,
+      now,
+    ),
+  ];
+  if (capabilityCharge) {
+    batch.push(deductCapabilityBudgetStatement(env, capabilityCharge));
+  }
+  await env.DB.batch(batch);
+
+  const invoice = await env.DB.prepare(
+    `SELECT amount_due, currency FROM meteria402_invoices WHERE id = ? AND account_id = ?`,
+  )
+    .bind(invoiceId, accountId)
+    .first<{ amount_due: number; currency: string }>();
+  if (!invoice) {
+    return {
+      ok: false,
+      status: 404,
+      body: {
+        invoice_id: invoiceId,
+        payment_id: paymentId,
+        status: "invoice_not_found",
+      },
+    };
+  }
+
+  const paid = await payInvoiceFromExcessDeposit(
+    env,
+    accountId,
+    invoiceId,
+    invoice.amount_due,
+    invoice.currency,
+  );
+  return {
+    ok: paid.ok,
+    status: paid.ok ? 200 : 409,
+    body: {
+      invoice_id: invoiceId,
+      payment_id: paymentId,
+      status: paid.ok ? "paid" : "unpaid",
+      recharge_amount: formatMoney(payment.amount),
+      amount: formatMoney(invoice.amount_due),
+    },
+  };
 }
 
 export async function handleRefundRequest(
@@ -1224,22 +1665,6 @@ async function getActiveAutopayCapability(
   return row ?? null;
 }
 
-async function deductCapabilityBudget(
-  env: Env,
-  capabilityId: string,
-  amount: number,
-): Promise<void> {
-  await env.DB.prepare(
-    `UPDATE meteria402_autopay_capabilities
-     SET spent_amount = spent_amount + ?
-     WHERE id = ?
-       AND revoked_at IS NULL
-       AND (spent_amount + ?) <= total_budget`,
-  )
-    .bind(amount, capabilityId, amount)
-    .run();
-}
-
 async function callAutopayPay(
   env: Env,
   request: Request | null,
@@ -1272,6 +1697,8 @@ async function tryAutopayWithCapability(
 ): Promise<{
   payment_payload: unknown;
   headers: Record<string, string>;
+  capability_id: string;
+  capability_amount: number;
 } | null> {
   const capability = await getActiveAutopayCapability(env, accountId, amount);
   if (!capability) return null;
@@ -1299,12 +1726,11 @@ async function tryAutopayWithCapability(
       return null;
     }
 
-    // Deduct budget only after successful payment creation
-    await deductCapabilityBudget(env, capability.id, amount);
-
     return {
       payment_payload: body.payment_payload,
       headers: (body.headers as Record<string, string>) || {},
+      capability_id: capability.id,
+      capability_amount: amount,
     };
   } catch (error) {
     console.warn("Capability pay error", error);
@@ -1316,7 +1742,7 @@ export async function tryAutoPayInvoice(
   env: Env,
   accountId: string,
   amount: number,
-  requirement: PaymentRequirement,
+  _requirement: PaymentRequirement,
 ): Promise<{ ok: true; method: string } | { ok: false }> {
   const account = await getAccount(env, accountId);
   if (!account) return { ok: false };
@@ -1325,17 +1751,6 @@ export async function tryAutoPayInvoice(
   const excess = account.deposit_balance - account.min_deposit_required;
   if (excess >= amount) {
     return { ok: true, method: "excess_deposit" };
-  }
-
-  // 2. 尝试 capability autopay
-  const capResult = await tryAutopayWithCapability(
-    env,
-    accountId,
-    JSON.stringify(requirement),
-    amount,
-  );
-  if (capResult) {
-    return { ok: true, method: "capability" };
   }
 
   return { ok: false };
@@ -1381,18 +1796,26 @@ export async function tryAutopayRecharge(
   }
 
   const paymentRequirementJson = JSON.stringify(requirement);
-  const settlement = await verifyPayment(env, paymentRequirementJson, capResult.payment_payload);
+  const settlement = await verifyPayment(
+    env,
+    paymentRequirementJson,
+    capResult.payment_payload,
+  );
   if (!settlement.ok) {
     console.warn("[auto-recharge] settlement failed", settlement.message);
     return { ok: false };
   }
 
   const now = new Date().toISOString();
-  const payloadHash = await sha256Hex(JSON.stringify(capResult.payment_payload));
+  const payloadHash = await sha256Hex(
+    JSON.stringify(capResult.payment_payload),
+  );
 
   const existingPayload = await env.DB.prepare(
     `SELECT id FROM meteria402_payments WHERE x402_payload_hash = ?`,
-  ).bind(payloadHash).first<{ id: string }>();
+  )
+    .bind(payloadHash)
+    .first<{ id: string }>();
   if (existingPayload) {
     console.warn("[auto-recharge] payload already used");
     return { ok: false };
@@ -1404,6 +1827,10 @@ export async function tryAutopayRecharge(
     env.DB.prepare(
       `UPDATE meteria402_accounts SET deposit_balance = ?, updated_at = ? WHERE id = ?`,
     ).bind(newBalance, now, accountId),
+    deductCapabilityBudgetStatement(env, {
+      id: capResult.capability_id,
+      amount: capResult.capability_amount,
+    }),
     env.DB.prepare(
       `INSERT INTO meteria402_payments (id, account_id, kind, amount, currency, status, x402_payload_hash, tx_hash, payment_requirement_json, response_json, created_at, settled_at)
        VALUES (?, ?, 'deposit', ?, ?, 'settled', ?, ?, ?, ?, ?, ?)`,
