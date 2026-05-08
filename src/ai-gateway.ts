@@ -111,7 +111,10 @@ export async function fetchAiGatewayLogCost(
     return null;
   }
 
-  const cost = Math.max(1, Math.ceil(dollarCost * 1_000_000));
+  const cost = applyBillingCostMultiplier(
+    env,
+    Math.max(1, Math.ceil(dollarCost * 1_000_000)),
+  );
   return {
     id: logId,
     cost,
@@ -159,7 +162,10 @@ export async function fetchAiGatewayLogByEventId(
           log &&
           (log.eventId === eventId || log.metadataRequestId === eventId)
         ) {
-          return log;
+          return {
+            ...log,
+            cost: applyBillingCostMultiplier(env, log.cost),
+          };
         }
       }
     }
@@ -181,7 +187,19 @@ export function calculateCost(model: unknown, usage: Usage, env: Env): number {
   const cost = Math.ceil(
     usage.inputTokens * inputPrice + usage.outputTokens * outputPrice,
   );
-  return Math.max(cost, 1);
+  return applyBillingCostMultiplier(env, Math.max(cost, 1));
+}
+
+function applyBillingCostMultiplier(env: Env, cost: number): number {
+  const multiplier = billingCostMultiplier(env);
+  return Math.max(1, Math.ceil(cost * multiplier));
+}
+
+function billingCostMultiplier(env: Env): number {
+  const configured = env.BILLING_COST_MULTIPLIER?.trim();
+  if (!configured) return 1.055;
+  const value = Number(configured);
+  return Number.isFinite(value) && value > 0 ? value : 1.055;
 }
 
 export function extractUsageFromText(text: string): Usage | null {

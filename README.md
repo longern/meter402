@@ -97,6 +97,10 @@ wrangler secret put X402_RECIPIENT_PRIVATE_KEY
 `CLOUDFLARE_API_TOKEN` is used only for AI Gateway log reconciliation and needs
 Cloudflare AI Gateway read access for the configured account/gateway.
 
+Billing costs are multiplied by `BILLING_COST_MULTIPLIER` before invoices are
+created. This is intended to cover card processing fees and similar transaction
+costs. If unset, the Worker defaults to `1.055`.
+
 For a gateway that requires Cloudflare AI Gateway authentication, also set:
 
 ```bash

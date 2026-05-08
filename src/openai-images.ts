@@ -56,9 +56,6 @@ export async function readOpenAiImageRequest(
   }
 
   const images = normalizeImageInputs(body);
-  if (images.length === 1) {
-    input.image = images[0];
-  }
   if (images.length > 0) {
     input.images = images;
   }
@@ -105,7 +102,7 @@ async function readImageMultipartRequest(
   const fileReads: Array<Promise<void>> = [];
   formData.forEach((value, key) => {
     if (value instanceof File) {
-      if (key === "image" || key === "images") {
+      if (isImageFieldName(key)) {
         fileReads.push(
           fileToDataUrl(value).then((image) => {
             images.push(image);
@@ -114,7 +111,7 @@ async function readImageMultipartRequest(
       }
       return;
     }
-    if (key === "image" || key === "images") {
+    if (isImageFieldName(key)) {
       images.push(String(value));
       return;
     }
@@ -123,6 +120,10 @@ async function readImageMultipartRequest(
   await Promise.all(fileReads);
   if (images.length > 0) body.images = images;
   return body;
+}
+
+function isImageFieldName(key: string): boolean {
+  return key === "image" || key === "images" || key === "image[]" || key === "images[]";
 }
 
 function normalizeImageInputs(body: Record<string, unknown>): string[] {

@@ -10,7 +10,25 @@ routes = [
 directory = "./dist/client"
 html_handling = "auto-trailing-slash"
 not_found_handling = "single-page-application"
-run_worker_first = ["/api/*", "/v1/*", "/health"]
+run_worker_first = [
+  "/api/*",
+  "/v1/*",
+  "/compat/*",
+  "/anthropic/*",
+  "/google-ai-studio/*",
+  "/openrouter/*",
+  "/mistral/*",
+  "/groq/*",
+  "/deepseek/*",
+  "/perplexity/*",
+  "/grok/*",
+  "/workers-ai/*",
+  "/azure-openai/*",
+  "/cohere/*",
+  "/replicate/*",
+  "/huggingface/*",
+  "/health",
+]
 
 [ai]
 binding = "AI"
