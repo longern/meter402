@@ -1,5 +1,5 @@
 import { DEFAULT_GATEWAY_PROVIDER } from "./gateway-providers";
-import { numberFromUnknown,parseMoneyLikeNumber } from "./money";
+import { numberFromUnknown } from "./money";
 import type { Env,Usage } from "./types";
 
 export function buildAiGatewayRequest(
@@ -172,22 +172,6 @@ export async function fetchAiGatewayLogByEventId(
   }
 
   return null;
-}
-
-export function calculateCost(model: unknown, usage: Usage, env: Env): number {
-  const priceTable = parsePriceTable(env);
-  const modelKey = typeof model === "string" ? model : "";
-  const modelPrice = modelKey ? priceTable[modelKey] : undefined;
-  const inputPrice =
-    modelPrice?.input_micro_usd_per_token ??
-    parseMoneyLikeNumber(env.DEFAULT_INPUT_MICRO_USD_PER_TOKEN ?? "1");
-  const outputPrice =
-    modelPrice?.output_micro_usd_per_token ??
-    parseMoneyLikeNumber(env.DEFAULT_OUTPUT_MICRO_USD_PER_TOKEN ?? "4");
-  const cost = Math.ceil(
-    usage.inputTokens * inputPrice + usage.outputTokens * outputPrice,
-  );
-  return applyBillingCostMultiplier(env, Math.max(cost, 1));
 }
 
 function applyBillingCostMultiplier(env: Env, cost: number): number {
@@ -412,42 +396,6 @@ function usageFromAiGatewayLog(log: Record<string, unknown>): Usage | undefined 
   const output = outputTokens ?? 0;
   const total = numberFromUnknown(log.total_tokens) ?? input + output;
   return { inputTokens: input, outputTokens: output, totalTokens: total };
-}
-
-function parsePriceTable(
-  env: Env,
-): Record<
-  string,
-  { input_micro_usd_per_token: number; output_micro_usd_per_token: number }
-> {
-  const raw = (env as { PRICE_TABLE_JSON?: string }).PRICE_TABLE_JSON;
-  if (!raw) return {};
-  try {
-    const parsed = JSON.parse(raw) as Record<
-      string,
-      {
-        input_micro_usd_per_token?: unknown;
-        output_micro_usd_per_token?: unknown;
-      }
-    >;
-    const table: Record<
-      string,
-      { input_micro_usd_per_token: number; output_micro_usd_per_token: number }
-    > = {};
-    for (const [key, value] of Object.entries(parsed)) {
-      table[key] = {
-        input_micro_usd_per_token: parseMoneyLikeNumber(
-          String(value.input_micro_usd_per_token ?? "0"),
-        ),
-        output_micro_usd_per_token: parseMoneyLikeNumber(
-          String(value.output_micro_usd_per_token ?? "0"),
-        ),
-      };
-    }
-    return table;
-  } catch {
-    return {};
-  }
 }
 
 function normalizeUsage(value: unknown): Usage | null {

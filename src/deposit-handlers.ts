@@ -10,7 +10,7 @@ import {
   requireString,
 } from "./http";
 import { formatMoney, parseMoney, parsePositiveInt } from "./money";
-import { readOptionalSession } from "./session";
+import { requireSession } from "./session";
 import {
   signDepositIntent,
   signDepositQuote,
@@ -38,6 +38,7 @@ export async function handleDepositQuote(
   request: Request,
   env: Env,
 ): Promise<Response> {
+  const session = await requireSession(request, env);
   const body = await readJsonObject(request);
   const amount = parseMoney(
     String(body.amount ?? env.DEFAULT_MIN_DEPOSIT ?? "5.00"),
@@ -78,6 +79,8 @@ export async function handleDepositQuote(
     kind: "deposit",
     amount,
     currency: paymentCurrency,
+    owner_address: session.owner,
+    autopay_url: session.autopay_url,
     payment_requirement: requirement,
     authorization: authMeta,
     expires_at: expiresAt,
@@ -86,6 +89,8 @@ export async function handleDepositQuote(
   const intentToken = await signDepositIntent(env, {
     payment_id: paymentId,
     amount,
+    owner_address: session.owner,
+    autopay_url: session.autopay_url,
     token_amount: accept.amount,
     currency: paymentCurrency,
     network: accept.network,
@@ -156,15 +161,8 @@ export async function handleDepositSettle(
       : typeof body.txHash === "string"
         ? body.txHash
         : undefined;
-  const session = await readOptionalSession(request, env);
-  let ownerAddress =
-    body.owner_address == null && body.ownerAddress == null
-      ? (session?.owner ?? null)
-      : normalizeEvmAddress(body.owner_address ?? body.ownerAddress);
-  const autopayUrl =
-    body.autopay_url == null && body.autopayUrl == null
-      ? (session?.autopay_url ?? null)
-      : normalizeAutopayUrl(body.autopay_url ?? body.autopayUrl);
+  const ownerAddress = normalizeEvmAddress(quote.owner_address);
+  const autopayUrl = quote.autopay_url ? normalizeAutopayUrl(quote.autopay_url) : null;
 
   const paymentRequirementJson = JSON.stringify(quote.payment_requirement);
   const paymentCurrency = quote.currency;
@@ -245,9 +243,6 @@ export async function handleDepositSettle(
       payerAddress: txResult.payerAddress,
       raw: txResult.raw,
     };
-    if (!ownerAddress) {
-      ownerAddress = normalizeEvmAddress(txResult.payerAddress);
-    }
   } else {
     // Validate authorization nonce matches what we issued
     if (paymentPayload) {
@@ -369,15 +364,13 @@ export async function handleDepositSettle(
 
   const minDeposit = parseMoney(env.DEFAULT_MIN_DEPOSIT ?? "5.00");
   const concurrencyLimit = parsePositiveInt(
-    env.DEFAULT_CONCURRENCY_LIMIT ?? "1",
-    1,
+    env.DEFAULT_CONCURRENCY_LIMIT ?? "8",
+    8,
   );
 
   // ─── Check if owner already has an account — if so, top up instead of creating new ───
-  let existingAccount: { id: string; deposit_balance: number } | null = null;
-  if (ownerAddress) {
-    existingAccount = await getAccountByOwner(env, ownerAddress);
-  }
+  let existingAccount: { id: string; deposit_balance: number } | null =
+    await getAccountByOwner(env, ownerAddress);
 
   if (existingAccount) {
     // Top-up existing account
@@ -437,10 +430,10 @@ export async function handleDepositSettle(
   const apiKeyHash = await sha256Hex(apiKey.secret);
 
   await env.DB.batch([
-    env.DB.prepare(
-      `INSERT INTO meteria402_accounts
-       (id, status, owner_address, autopay_url, deposit_balance, unpaid_invoice_total, active_request_count, concurrency_limit, min_deposit_required, refund_address, autopay_min_recharge_amount, created_at, updated_at)
-       VALUES (?, 'active', ?, ?, ?, 0, 0, ?, ?, ?, 10000, ?, ?)`,
+	    env.DB.prepare(
+	      `INSERT INTO meteria402_accounts
+	       (id, status, owner_address, autopay_url, deposit_balance, unpaid_invoice_total, concurrency_limit, min_deposit_required, refund_address, autopay_min_recharge_amount, created_at, updated_at)
+	       VALUES (?, 'active', ?, ?, ?, 0, ?, ?, ?, 10000, ?, ?)`,
     ).bind(
       accountId,
       ownerAddress,
@@ -574,6 +567,8 @@ function depositQuoteFromIntent(
     kind: "deposit",
     amount: intent.amount,
     currency: intent.currency || paymentCurrencyFromRequirement(requirement),
+    owner_address: intent.owner_address,
+    autopay_url: intent.autopay_url,
     payment_requirement: requirement,
     authorization: {
       nonce: intent.nonce,
@@ -594,7 +589,6 @@ export async function handleDepositAutopayStart(
     body.quote_token ?? body.quoteToken,
     "quote_token",
   );
-  const autopayUrl = normalizeAutopayUrl(body.autopay_url ?? body.autopayUrl);
   const quote = await verifyDepositQuote(env, quoteToken);
   if (paymentId !== quote.payment_id) {
     return errorResponse(
@@ -603,6 +597,14 @@ export async function handleDepositAutopayStart(
       "Payment ID does not match the deposit quote.",
     );
   }
+  if (!quote.autopay_url) {
+    return errorResponse(
+      400,
+      "missing_autopay_url",
+      "Deposit quote does not include an autopay endpoint.",
+    );
+  }
+  const autopayUrl = normalizeAutopayUrl(quote.autopay_url);
 
   return startAutopayForDepositQuote(
     request,
@@ -636,6 +638,14 @@ export async function handleDepositAutopayComplete(
     autopayState,
   );
   if (result.status !== "approved") return jsonResponse(result);
+  const quote = await verifyDepositQuote(env, autopayState.quote_token);
+  if (normalizeEvmAddress(result.owner).toLowerCase() !== quote.owner_address.toLowerCase()) {
+    return errorResponse(
+      403,
+      "deposit_owner_mismatch",
+      "Approved wallet does not match the deposit owner.",
+    );
+  }
 
   const settleRequest = new Request(
     new URL("/api/deposits/settle", request.url),
@@ -646,8 +656,6 @@ export async function handleDepositAutopayComplete(
         payment_id: paymentId,
         quote_token: autopayState.quote_token,
         payment_payload: result.payment_payload,
-        owner_address: result.owner,
-        autopay_url: autopayState.autopay_url,
       }),
     },
   );

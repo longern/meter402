@@ -3,6 +3,7 @@ import {
   requireAccountFromSession,
   requirePaymentAccountAutopayUrl,
 } from "./accounts";
+import { accountGateActiveCount } from "./account-gate";
 import { normalizeAutopayUrl } from "./autopay";
 import { BASE_MAINNET, BASE_USDC, JSON_HEADERS } from "./constants";
 import { makeId, sha256Hex } from "./crypto";
@@ -1302,11 +1303,13 @@ export async function handleRefundRequest(
       },
     );
   }
-  if (account.active_request_count > 0) {
+  const activeRequestCount = await accountGateActiveCount(env, account.id);
+  if (activeRequestCount > 0) {
     return errorResponse(
       409,
       "requests_running",
       "Refund cannot be requested while requests are running.",
+      { active_request_count: activeRequestCount },
     );
   }
 
@@ -1821,12 +1824,12 @@ export async function tryAutopayRecharge(
     return { ok: false };
   }
 
-  const newBalance = account.deposit_balance + rechargeAmount;
-
   await env.DB.batch([
     env.DB.prepare(
-      `UPDATE meteria402_accounts SET deposit_balance = ?, updated_at = ? WHERE id = ?`,
-    ).bind(newBalance, now, accountId),
+      `UPDATE meteria402_accounts
+       SET deposit_balance = deposit_balance + ?, updated_at = ?
+       WHERE id = ?`,
+    ).bind(rechargeAmount, now, accountId),
     deductCapabilityBudgetStatement(env, {
       id: capResult.capability_id,
       amount: capResult.capability_amount,

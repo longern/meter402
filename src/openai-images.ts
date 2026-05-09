@@ -1,7 +1,7 @@
 import { errorResponse, readJsonObject } from "./http";
 import { numberFromUnknown } from "./money";
 
-export type OpenAiImageRequest = {
+type OpenAiImageRequest = {
   model: string;
   input: Record<string, unknown>;
 };

@@ -216,8 +216,6 @@ export default function DepositDialog({
             payment_id: pid,
             quote_token: qToken,
             payment_payload: x402Payload,
-            owner_address: from,
-            autopay_url: identity?.autopay_url || undefined,
           }),
         });
       } catch (e) {

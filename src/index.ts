@@ -1,4 +1,5 @@
 import { routeHandlers, scheduledReconcile } from "./app";
+export { AccountGate } from "./account-gate";
 export { LoginSession } from "./login";
 import {
   asHttpError,

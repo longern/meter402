@@ -1,4 +1,4 @@
-export type GatewayProviderRoute = {
+type GatewayProviderRoute = {
   publicPrefix: string;
   gatewayProvider: string;
   label: string;

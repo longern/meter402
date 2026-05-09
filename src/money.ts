@@ -9,12 +9,6 @@ export function parseMoney(value: string): number {
   return Number(whole) * 1_000_000 + Number(fraction.padEnd(6, "0"));
 }
 
-export function parseMoneyLikeNumber(value: string): number {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0) return 0;
-  return parsed;
-}
-
 export function formatMoney(microUsd: number): string {
   const sign = microUsd < 0 ? "-" : "";
   const abs = Math.abs(Math.round(microUsd));

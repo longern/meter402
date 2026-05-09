@@ -25,8 +25,17 @@ export async function verifyPayment(
   | { ok: true; txHash?: string; payerAddress?: string; raw?: unknown }
   | { ok: false; message: string; facilitatorStatus?: number; raw?: unknown }
 > {
-  if (env.ALLOW_DEV_PAYMENTS === "true" && devProof === "dev-paid") {
-    return { ok: true, txHash: `dev:${makeId("tx")}`, raw: { dev: true } };
+  if (env.ALLOW_DEV_PAYMENTS === "true") {
+    const configuredProof = env.DEV_PAYMENT_PROOF?.trim();
+    if (configuredProof && devProof === configuredProof) {
+      return { ok: true, txHash: `dev:${makeId("tx")}`, raw: { dev: true } };
+    }
+    if (devProof) {
+      return {
+        ok: false,
+        message: "Development payment proof is invalid.",
+      };
+    }
   }
 
   if (!paymentPayload) {
@@ -200,7 +209,7 @@ export function normalizeEvmAddress(value: unknown): string {
       "A valid EVM address is required.",
     );
   }
-  return value;
+  return value.toLowerCase();
 }
 
 export async function verifyTxHash(

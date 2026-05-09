@@ -37,9 +37,17 @@ binding = "AI"
 name = "LOGIN_SESSIONS"
 class_name = "LoginSession"
 
+[[durable_objects.bindings]]
+name = "ACCOUNT_GATES"
+class_name = "AccountGate"
+
 [[migrations]]
 tag = "v1_login_sessions"
 new_sqlite_classes = ["LoginSession"]
+
+[[migrations]]
+tag = "v2_account_gates"
+new_sqlite_classes = ["AccountGate"]
 
 [[d1_databases]]
 binding = "DB"
@@ -58,9 +66,7 @@ CLOUDFLARE_ACCOUNT_ID = "47d267b33cc0b14271613d84942946bb"
 AI_GATEWAY_ID = "default"
 X402_ASSET_DECIMALS = "6"
 DEFAULT_MIN_DEPOSIT = "5.00"
-DEFAULT_CONCURRENCY_LIMIT = "1"
-DEFAULT_INPUT_MICRO_USD_PER_TOKEN = "1"
-DEFAULT_OUTPUT_MICRO_USD_PER_TOKEN = "4"
+METERED_REQUEST_LEASE_SECONDS = "3600"
 ALLOW_DEV_PAYMENTS = "false"
 
 # Set secrets with wrangler:

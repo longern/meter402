@@ -143,15 +143,16 @@ Local development can bypass facilitator settlement by setting:
 
 ```toml
 ALLOW_DEV_PAYMENTS = "true"
+DEV_PAYMENT_PROOF = "<local random proof>"
 ```
 
 Then `/console` can settle a quote using:
 
 ```json
-{ "dev_proof": "dev-paid" }
+{ "dev_proof": "<local random proof>" }
 ```
 
-Do not enable development payments in production.
+Do not enable development payments in production. The proof must be a local secret; there is no built-in fixed proof string.
 
 ## API
 

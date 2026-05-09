@@ -13,7 +13,6 @@ export type Env = {
   AI_GATEWAY_ID?: string;
   AI_GATEWAY_API_KEY?: string;
   AI_GATEWAY_AUTH_TOKEN?: string;
-  PRICE_TABLE_JSON?: string;
   X402_FACILITATOR_URL?: string;
   X402_FACILITATOR_AUTH_TOKEN?: string;
   X402_RECIPIENT_ADDRESS?: string;
@@ -25,13 +24,14 @@ export type Env = {
   UPSTREAM_BASE_URL?: string;
   DEFAULT_MIN_DEPOSIT?: string;
   DEFAULT_CONCURRENCY_LIMIT?: string;
-  DEFAULT_INPUT_MICRO_USD_PER_TOKEN?: string;
-  DEFAULT_OUTPUT_MICRO_USD_PER_TOKEN?: string;
   BILLING_COST_MULTIPLIER?: string;
   ALLOW_DEV_PAYMENTS?: string;
+  DEV_PAYMENT_PROOF?: string;
+  METERED_REQUEST_LEASE_SECONDS?: string;
   X402_ASSET_DECIMALS?: string;
   AUTOPAY_REQUESTER_ORIGIN?: string;
   AUTOPAY_REQUESTER_NAME?: string;
+  ACCOUNT_GATES: DurableObjectNamespace;
   LOGIN_SESSIONS: DurableObjectNamespace;
 };
 
@@ -42,7 +42,6 @@ export type Account = {
   autopay_url: string | null;
   deposit_balance: number;
   unpaid_invoice_total: number;
-  active_request_count: number;
   concurrency_limit: number;
   min_deposit_required: number;
   autopay_min_recharge_amount: number;
@@ -96,14 +95,6 @@ export type AutopayRequestRow = {
   verification_uri_complete: string;
 };
 
-export type LoginState = {
-  autopay_url: string;
-  autopay_request_id: string;
-  poll_token: string;
-  verification_uri_complete: string;
-  expires_at: number;
-};
-
 export type LoginChallengeState = {
   address: string;
   request_id?: string;
@@ -126,6 +117,8 @@ export type DepositQuoteState = {
   kind: "deposit";
   amount: number;
   currency: string;
+  owner_address: string;
+  autopay_url: string;
   payment_requirement: PaymentRequirement;
   authorization: {
     nonce: string;
@@ -138,6 +131,8 @@ export type DepositQuoteState = {
 export type DepositIntentState = {
   payment_id: string;
   amount: number;
+  owner_address: string;
+  autopay_url: string;
   token_amount: string;
   currency: string;
   network: string;
@@ -162,20 +157,4 @@ export type DepositAutopayState = {
 export type AutopayWalletBalanceEligibility = {
   account: Account;
   owner: string;
-};
-
-export type AutopayCapabilityRow = {
-  id: string;
-  account_id: string;
-  owner_address: string;
-  autopay_url: string;
-  siwe_message: string;
-  siwe_signature: string;
-  capability_json: string;
-  max_single_amount: number;
-  total_budget: number;
-  spent_amount: number;
-  valid_before: string;
-  created_at: string;
-  revoked_at: string | null;
 };

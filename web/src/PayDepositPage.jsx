@@ -252,7 +252,6 @@ export default function PayDepositPage() {
           payment_id: data.pid,
           ...(data.intent ? { deposit_intent: data.intent } : { quote_token: data.qt }),
           payment_payload: x402Payload,
-          owner_address: from,
         }),
       });
 

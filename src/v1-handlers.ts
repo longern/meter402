@@ -1,7 +1,7 @@
 import {
 authenticate,
-getAccount
 } from "./accounts";
+import { claimAccountGate, releaseAccountGate } from "./account-gate";
 import {
 buildAiGatewayRequest,
 extractUsageFromSseBuffer,
@@ -24,7 +24,8 @@ paymentRequiredResponse,
 readJsonObject
 } from "./http";
 import {
-formatMoney
+formatMoney,
+parsePositiveInt
 } from "./money";
 import {
 extractCloudflareAiImage,
@@ -32,10 +33,11 @@ openAiImageDataItem,
 readOpenAiImageRequest,
 } from "./openai-images";
 import type {
-ChatBody,
-Env,
-Usage
-} from "./types";
+	ChatBody,
+	AuthenticatedAccount,
+	Env,
+	Usage
+	} from "./types";
 import {
 createPaymentRequirementFromValues,
 paymentCurrencyFromRequirement
@@ -45,6 +47,10 @@ import { tryAutoPayInvoice,tryAutopayRecharge } from "./billing-autopay-handlers
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function meteredRequestLeaseSeconds(env: Env): number {
+  return parsePositiveInt(env.METERED_REQUEST_LEASE_SECONDS ?? "3600", 3600);
 }
 
 async function handleChatCompletions(
@@ -76,15 +82,9 @@ async function handleChatCompletions(
   }
 
   const requestId = makeId("req");
-  const started = await startMeteredRequest(
-    env,
-    account.id,
-    account.api_key_id,
-    requestId,
-    String(body.model ?? ""),
-    stream,
-  );
+  const started = await startMeteredRequest(env, account, requestId, String(body.model ?? ""), stream);
   if (started instanceof Response) return started;
+  const leaseId = started.leaseId;
 
   const upstreamRequest = buildAiGatewayRequest(
     env,
@@ -104,6 +104,7 @@ async function handleChatCompletions(
     await failMeteredRequest(
       env,
       account.id,
+      leaseId,
       requestId,
       "upstream_fetch_failed",
     );
@@ -119,6 +120,7 @@ async function handleChatCompletions(
     await failMeteredRequest(
       env,
       account.id,
+      leaseId,
       requestId,
       `upstream_${upstreamResponse.status}`,
     );
@@ -133,6 +135,7 @@ async function handleChatCompletions(
       env,
       ctx,
       account.id,
+      leaseId,
       requestId,
       body,
     );
@@ -147,6 +150,7 @@ async function handleChatCompletions(
     await deferMeteredRequestForGatewayReconcile(
       env,
       account.id,
+      leaseId,
       requestId,
       body.model,
       null,
@@ -164,6 +168,7 @@ async function handleChatCompletions(
   await deferMeteredRequestForGatewayReconcile(
     env,
     account.id,
+    leaseId,
     requestId,
     body.model,
     usage,
@@ -217,15 +222,9 @@ async function handleOpenAiImageRequest(
   if (parsed instanceof Response) return parsed;
 
   const requestId = makeId("req");
-  const started = await startMeteredRequest(
-    env,
-    account.id,
-    account.api_key_id,
-    requestId,
-    parsed.model,
-    false,
-  );
+  const started = await startMeteredRequest(env, account, requestId, parsed.model, false);
   if (started instanceof Response) return started;
+  const leaseId = started.leaseId;
 
   let aiResponse: unknown;
   let aiGatewayLogId: string | null = null;
@@ -243,6 +242,7 @@ async function handleOpenAiImageRequest(
     await failMeteredRequest(
       env,
       account.id,
+      leaseId,
       requestId,
       "upstream_ai_binding_failed",
     );
@@ -259,6 +259,7 @@ async function handleOpenAiImageRequest(
     await failMeteredRequest(
       env,
       account.id,
+      leaseId,
       requestId,
       "invalid_image_response",
     );
@@ -287,6 +288,7 @@ async function handleOpenAiImageRequest(
   await deferMeteredRequestForGatewayReconcile(
     env,
     account.id,
+    leaseId,
     requestId,
     parsed.model,
     null,
@@ -299,6 +301,7 @@ async function handleOpenAiImageRequest(
     await failMeteredRequest(
       env,
       account.id,
+      leaseId,
       requestId,
       "image_conversion_failed",
     );
@@ -465,15 +468,9 @@ async function handleGenericV1Endpoint(
 
   const model = typeof bodyJson?.model === "string" ? bodyJson.model : endpoint;
   const requestId = makeId("req");
-  const started = await startMeteredRequest(
-    env,
-    account.id,
-    account.api_key_id,
-    requestId,
-    model,
-    false,
-  );
+  const started = await startMeteredRequest(env, account, requestId, model, false);
   if (started instanceof Response) return started;
+  const leaseId = started.leaseId;
 
   const upstreamRequest = buildAiGatewayRequest(
     env,
@@ -493,6 +490,7 @@ async function handleGenericV1Endpoint(
     await failMeteredRequest(
       env,
       account.id,
+      leaseId,
       requestId,
       "upstream_fetch_failed",
     );
@@ -508,6 +506,7 @@ async function handleGenericV1Endpoint(
     await failMeteredRequest(
       env,
       account.id,
+      leaseId,
       requestId,
       `upstream_${upstreamResponse.status}`,
     );
@@ -538,6 +537,7 @@ async function handleGenericV1Endpoint(
     await deferMeteredRequestForGatewayReconcile(
       env,
       account.id,
+      leaseId,
       requestId,
       model,
       null,
@@ -555,6 +555,7 @@ async function handleGenericV1Endpoint(
   await deferMeteredRequestForGatewayReconcile(
     env,
     account.id,
+    leaseId,
     requestId,
     model,
     usage,
@@ -572,61 +573,55 @@ async function handleGenericV1Endpoint(
 
 async function startMeteredRequest(
   env: Env,
-  accountId: string,
-  apiKeyId: string,
+  account: AuthenticatedAccount,
   requestId: string,
   model: string,
   stream: boolean,
-): Promise<true | Response> {
+): Promise<{ leaseId: string } | Response> {
   const now = new Date().toISOString();
-  const gate = await env.DB.prepare(
-    `UPDATE meteria402_accounts
-     SET active_request_count = active_request_count + 1, updated_at = ?
-     WHERE id = ?
-       AND status = 'active'
-       AND unpaid_invoice_total = 0
-       AND deposit_balance >= min_deposit_required
-       AND active_request_count < concurrency_limit
-     RETURNING id`,
-  )
-    .bind(now, accountId)
-    .first<{ id: string }>();
+  if (account.status !== "active") {
+    return errorResponse(
+      403,
+      "account_not_active",
+      "The account is not active.",
+    );
+  }
+  if (account.unpaid_invoice_total > 0) {
+    return paymentRequiredResponse(
+      "unpaid_invoice",
+      "An unpaid invoice must be paid before making another request.",
+      {
+        unpaid_invoice_total: formatMoney(account.unpaid_invoice_total),
+      },
+    );
+  }
+  if (account.deposit_balance < account.min_deposit_required) {
+    return paymentRequiredResponse(
+      "deposit_required",
+      "A refundable deposit is required before making this request.",
+      {
+        required_deposit: formatMoney(account.min_deposit_required),
+        current_deposit: formatMoney(account.deposit_balance),
+      },
+    );
+  }
 
-  if (!gate) {
-    const account = await getAccount(env, accountId);
-    if (!account) {
-      return errorResponse(401, "invalid_api_key", "The API key is invalid.");
-    }
-    if (account.status !== "active") {
-      return errorResponse(
-        403,
-        "account_not_active",
-        "The account is not active.",
-      );
-    }
-    if (account.unpaid_invoice_total > 0) {
-      return paymentRequiredResponse(
-        "unpaid_invoice",
-        "An unpaid invoice must be paid before making another request.",
-        {
-          unpaid_invoice_total: formatMoney(account.unpaid_invoice_total),
-        },
-      );
-    }
-    if (account.deposit_balance < account.min_deposit_required) {
-      return paymentRequiredResponse(
-        "deposit_required",
-        "A refundable deposit is required before making this request.",
-        {
-          required_deposit: formatMoney(account.min_deposit_required),
-          current_deposit: formatMoney(account.deposit_balance),
-        },
-      );
-    }
+  const gate = await claimAccountGate(
+    env,
+    account.id,
+    requestId,
+    account.concurrency_limit,
+    meteredRequestLeaseSeconds(env),
+  );
+  if (!gate.ok) {
     return errorResponse(
       429,
       "concurrency_limit_exceeded",
       "The account concurrency limit has been reached.",
+      {
+        active_request_count: gate.activeCount,
+        concurrency_limit: account.concurrency_limit,
+      },
     );
   }
 
@@ -635,40 +630,48 @@ async function startMeteredRequest(
       `INSERT INTO meteria402_requests (id, account_id, api_key_id, status, model, stream, started_at)
        VALUES (?, ?, ?, 'running', ?, ?, ?)`,
     )
-      .bind(requestId, accountId, apiKeyId, model || null, stream ? 1 : 0, now)
+      .bind(
+        requestId,
+        account.id,
+        account.api_key_id,
+        model || null,
+        stream ? 1 : 0,
+        now,
+      )
       .run();
   } catch (error) {
-    await decrementActiveRequest(env, accountId);
+    await releaseAccountGate(env, account.id, gate.leaseId);
     throw error;
   }
 
-  return true;
+  return { leaseId: gate.leaseId };
 }
 
 async function failMeteredRequest(
   env: Env,
   accountId: string,
+  leaseId: string,
   requestId: string,
   errorCode: string,
 ): Promise<void> {
   const now = new Date().toISOString();
-  await env.DB.batch([
-    env.DB.prepare(
+  try {
+    await env.DB.prepare(
       `UPDATE meteria402_requests
        SET status = 'failed', error_code = ?, completed_at = ?
        WHERE id = ? AND account_id = ?`,
-    ).bind(errorCode, now, requestId, accountId),
-    env.DB.prepare(
-      `UPDATE meteria402_accounts
-       SET active_request_count = MAX(0, active_request_count - 1), updated_at = ?
-       WHERE id = ?`,
-    ).bind(now, accountId),
-  ]);
+    )
+      .bind(errorCode, now, requestId, accountId)
+      .run();
+  } finally {
+    await releaseAccountGate(env, accountId, leaseId);
+  }
 }
 
 async function deferMeteredRequestForGatewayReconcile(
   env: Env,
   accountId: string,
+  leaseId: string,
   requestId: string,
   model: unknown,
   usage: Usage | null,
@@ -676,8 +679,8 @@ async function deferMeteredRequestForGatewayReconcile(
 ): Promise<void> {
   const now = new Date().toISOString();
   const aigLogId = getAiGatewayLogId(upstreamHeaders);
-  await env.DB.batch([
-    env.DB.prepare(
+  try {
+    await env.DB.prepare(
       `UPDATE meteria402_requests
        SET status = 'pending_reconcile',
            model = COALESCE(?, model),
@@ -687,7 +690,8 @@ async function deferMeteredRequestForGatewayReconcile(
            total_tokens = COALESCE(?, total_tokens),
            completed_at = ?
        WHERE id = ? AND account_id = ?`,
-    ).bind(
+    )
+      .bind(
       String(model ?? "") || null,
       aigLogId,
       usage?.inputTokens ?? null,
@@ -696,13 +700,11 @@ async function deferMeteredRequestForGatewayReconcile(
       now,
       requestId,
       accountId,
-    ),
-    env.DB.prepare(
-      `UPDATE meteria402_accounts
-       SET active_request_count = MAX(0, active_request_count - 1), updated_at = ?
-       WHERE id = ?`,
-    ).bind(now, accountId),
-  ]);
+    )
+      .run();
+  } finally {
+    await releaseAccountGate(env, accountId, leaseId);
+  }
 }
 
 async function reconcileGatewayLogAfterDelay(
@@ -889,55 +891,42 @@ async function settleMeteredRequest(
 
   if (autoPay.ok) {
     // 自动支付成功：invoice 直接 paid
-    const ledgerId = makeId("led");
-    const batch: D1PreparedStatement[] = [
-      env.DB.prepare(
-        `INSERT INTO meteria402_invoices
-         (id, account_id, request_id, status, amount_due, currency, payment_requirement_json, created_at, paid_at)
-         VALUES (?, ?, ?, 'paid', ?, ?, ?, ?, ?)`,
-      ).bind(
-        invoiceId,
+    if (autoPay.method === "excess_deposit") {
+      const paid = await createPaidInvoiceFromExcessDeposit(
+        env,
         accountId,
         requestId,
+        invoiceId,
         cost,
         paymentCurrency,
         JSON.stringify(requirement),
         now,
-        now,
-      ),
-      env.DB.prepare(
-        `UPDATE meteria402_accounts
-         SET active_request_count = MAX(0, active_request_count - 1),
-             updated_at = ?
-         WHERE id = ?`,
-      ).bind(now, accountId),
-      env.DB.prepare(
-        `INSERT INTO meteria402_ledger_entries
-         (id, account_id, type, amount, currency, related_request_id, related_invoice_id, created_at)
-         VALUES (?, ?, 'invoice_paid', ?, ?, ?, ?, ?)`,
-      ).bind(
-        ledgerId,
+      );
+      if (!paid) {
+        await createUnpaidInvoiceForCompletedRequest(
+          env,
+          accountId,
+          requestId,
+          invoiceId,
+          cost,
+          paymentCurrency,
+          JSON.stringify(requirement),
+          now,
+        );
+        return { invoiceId, autoPaid: false };
+      }
+    } else {
+      await createPaidInvoiceForCompletedRequest(
+        env,
         accountId,
-        cost,
-        paymentCurrency,
         requestId,
         invoiceId,
+        cost,
+        paymentCurrency,
+        JSON.stringify(requirement),
         now,
-      ),
-    ];
-
-    if (autoPay.method === "excess_deposit") {
-      batch.push(
-        env.DB.prepare(
-          `UPDATE meteria402_accounts
-           SET deposit_balance = deposit_balance - ?,
-               updated_at = ?
-           WHERE id = ?`,
-        ).bind(cost, now, accountId),
       );
     }
-
-    await env.DB.batch(batch);
   } else {
     // 尝试自动充值
     rechargeResult = await tryAutopayRecharge(env, accountId, cost);
@@ -959,13 +948,12 @@ async function settleMeteredRequest(
           now,
           now,
         ),
-        env.DB.prepare(
-          `UPDATE meteria402_accounts
-           SET active_request_count = MAX(0, active_request_count - 1),
-               deposit_balance = deposit_balance - ?,
-               updated_at = ?
-           WHERE id = ?`,
-        ).bind(cost, now, accountId),
+	        env.DB.prepare(
+	          `UPDATE meteria402_accounts
+	           SET deposit_balance = deposit_balance - ?,
+	               updated_at = ?
+	           WHERE id = ?`,
+	        ).bind(cost, now, accountId),
         env.DB.prepare(
           `INSERT INTO meteria402_ledger_entries
            (id, account_id, type, amount, currency, related_request_id, related_invoice_id, created_at)
@@ -996,13 +984,12 @@ async function settleMeteredRequest(
           JSON.stringify(requirement),
           now,
         ),
-        env.DB.prepare(
-          `UPDATE meteria402_accounts
-           SET active_request_count = MAX(0, active_request_count - 1),
-               unpaid_invoice_total = unpaid_invoice_total + ?,
-               updated_at = ?
-           WHERE id = ?`,
-        ).bind(cost, now, accountId),
+	        env.DB.prepare(
+	          `UPDATE meteria402_accounts
+	           SET unpaid_invoice_total = unpaid_invoice_total + ?,
+	               updated_at = ?
+	           WHERE id = ?`,
+	        ).bind(cost, now, accountId),
         env.DB.prepare(
           `INSERT INTO meteria402_ledger_entries
            (id, account_id, type, amount, currency, related_request_id, related_invoice_id, created_at)
@@ -1031,17 +1018,162 @@ async function settleMeteredRequest(
   };
 }
 
-async function decrementActiveRequest(
+async function createPaidInvoiceFromExcessDeposit(
   env: Env,
   accountId: string,
+  requestId: string,
+  invoiceId: string,
+  amount: number,
+  paymentCurrency: string,
+  paymentRequirementJson: string,
+  now: string,
+): Promise<boolean> {
+  const results = await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO meteria402_invoices
+       (id, account_id, request_id, status, amount_due, currency, payment_requirement_json, created_at, paid_at)
+       SELECT ?, ?, ?, 'paid', ?, ?, ?, ?, ?
+       WHERE EXISTS (
+         SELECT 1
+         FROM meteria402_accounts
+         WHERE id = ?
+           AND deposit_balance - min_deposit_required >= ?
+       )`,
+    ).bind(
+      invoiceId,
+      accountId,
+      requestId,
+      amount,
+      paymentCurrency,
+      paymentRequirementJson,
+      now,
+      now,
+      accountId,
+      amount,
+    ),
+    env.DB.prepare(
+      `UPDATE meteria402_accounts
+       SET deposit_balance = deposit_balance - ?,
+           updated_at = ?
+       WHERE id = ?
+         AND deposit_balance - min_deposit_required >= ?`,
+    ).bind(amount, now, accountId, amount),
+    env.DB.prepare(
+      `INSERT INTO meteria402_ledger_entries
+       (id, account_id, type, amount, currency, related_request_id, related_invoice_id, created_at)
+       SELECT ?, ?, 'invoice_paid', ?, ?, ?, ?, ?
+       WHERE EXISTS (
+         SELECT 1
+         FROM meteria402_invoices
+         WHERE id = ?
+           AND account_id = ?
+           AND status = 'paid'
+       )`,
+    ).bind(
+      makeId("led"),
+      accountId,
+      amount,
+      paymentCurrency,
+      requestId,
+      invoiceId,
+      now,
+      invoiceId,
+      accountId,
+    ),
+  ]);
+  return ((results[0].meta.changes ?? 0) as number) > 0;
+}
+
+async function createPaidInvoiceForCompletedRequest(
+  env: Env,
+  accountId: string,
+  requestId: string,
+  invoiceId: string,
+  cost: number,
+  paymentCurrency: string,
+  paymentRequirementJson: string,
+  now: string,
 ): Promise<void> {
-  await env.DB.prepare(
-    `UPDATE meteria402_accounts
-     SET active_request_count = MAX(0, active_request_count - 1), updated_at = ?
-     WHERE id = ?`,
-  )
-    .bind(new Date().toISOString(), accountId)
-    .run();
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO meteria402_invoices
+       (id, account_id, request_id, status, amount_due, currency, payment_requirement_json, created_at, paid_at)
+       VALUES (?, ?, ?, 'paid', ?, ?, ?, ?, ?)`,
+    ).bind(
+      invoiceId,
+      accountId,
+      requestId,
+      cost,
+      paymentCurrency,
+      paymentRequirementJson,
+      now,
+      now,
+    ),
+    env.DB.prepare(
+      `UPDATE meteria402_accounts
+       SET updated_at = ?
+       WHERE id = ?`,
+    ).bind(now, accountId),
+    env.DB.prepare(
+      `INSERT INTO meteria402_ledger_entries
+       (id, account_id, type, amount, currency, related_request_id, related_invoice_id, created_at)
+       VALUES (?, ?, 'invoice_paid', ?, ?, ?, ?, ?)`,
+    ).bind(
+      makeId("led"),
+      accountId,
+      cost,
+      paymentCurrency,
+      requestId,
+      invoiceId,
+      now,
+    ),
+  ]);
+}
+
+async function createUnpaidInvoiceForCompletedRequest(
+  env: Env,
+  accountId: string,
+  requestId: string,
+  invoiceId: string,
+  cost: number,
+  paymentCurrency: string,
+  paymentRequirementJson: string,
+  now: string,
+): Promise<void> {
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO meteria402_invoices
+       (id, account_id, request_id, status, amount_due, currency, payment_requirement_json, created_at)
+       VALUES (?, ?, ?, 'unpaid', ?, ?, ?, ?)`,
+    ).bind(
+      invoiceId,
+      accountId,
+      requestId,
+      cost,
+      paymentCurrency,
+      paymentRequirementJson,
+      now,
+    ),
+    env.DB.prepare(
+      `UPDATE meteria402_accounts
+       SET unpaid_invoice_total = unpaid_invoice_total + ?,
+           updated_at = ?
+       WHERE id = ?`,
+    ).bind(cost, now, accountId),
+    env.DB.prepare(
+      `INSERT INTO meteria402_ledger_entries
+       (id, account_id, type, amount, currency, related_request_id, related_invoice_id, created_at)
+       VALUES (?, ?, 'invoice_created', ?, ?, ?, ?, ?)`,
+    ).bind(
+      makeId("led"),
+      accountId,
+      cost,
+      paymentCurrency,
+      requestId,
+      invoiceId,
+      now,
+    ),
+  ]);
 }
 
 function proxyStreamingResponse(
@@ -1049,6 +1181,7 @@ function proxyStreamingResponse(
   env: Env,
   ctx: ExecutionContext,
   accountId: string,
+  leaseId: string,
   requestId: string,
   body: ChatBody,
 ): Response {
@@ -1058,6 +1191,7 @@ function proxyStreamingResponse(
         await deferMeteredRequestForGatewayReconcile(
           env,
           accountId,
+          leaseId,
           requestId,
           body.model,
           null,
@@ -1106,6 +1240,7 @@ function proxyStreamingResponse(
           await deferMeteredRequestForGatewayReconcile(
             env,
             accountId,
+            leaseId,
             requestId,
             body.model,
             usage,
@@ -1116,6 +1251,7 @@ function proxyStreamingResponse(
           await deferMeteredRequestForGatewayReconcile(
             env,
             accountId,
+            leaseId,
             requestId,
             body.model,
             null,
@@ -1129,6 +1265,7 @@ function proxyStreamingResponse(
         await failMeteredRequest(
           env,
           accountId,
+          leaseId,
           requestId,
           "stream_proxy_failed",
         );
