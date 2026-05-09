@@ -8,7 +8,7 @@ The payment requester creates a short-lived authorization request, shows the ret
 
 - The x402 payer hot wallet private key is stored as a Cloudflare Worker secret.
 - The owner wallet signs SIWE authorization messages. The owner wallet does not pay x402 requests directly.
-- `AUTOPAY_ALLOWED_OWNERS` can restrict which owner wallet addresses may authorize this worker.
+- Owners are allowed when they are the configured admin owner or have an `autopay_accounts` record.
 - Each authorization request is short-lived and stored in a Durable Object session.
 - Polling uses a private `poll_token` that is returned only to the requester, not embedded in the QR URL.
 - SIWE `Resources` bind the authorization to the capability, auth request ID, and optionally a payment requirement hash.
@@ -24,19 +24,25 @@ Install dependencies:
 npm install
 ```
 
-Set the payer hot wallet private key:
+Set the worker secret used for dashboard session cookies and encrypted account wallets:
 
 ```bash
-wrangler secret put AUTOPAY_PRIVATE_KEY
+wrangler secret put AUTOPAY_SECRET
 ```
 
-Optionally restrict who can sign SIWE authorizations:
+You can set user payer hot wallet private keys from the dashboard after login. For the admin account fallback payer key, set:
+
+```bash
+wrangler secret put AUTOPAY_ADMIN_PRIVATE_KEY
+```
+
+Configure the administrator wallet:
 
 ```toml
-AUTOPAY_ALLOWED_OWNERS = "0xOwnerOne,0xOwnerTwo"
+AUTOPAY_ADMIN_OWNER = "0xAdminOwner"
 ```
 
-For EVM wallets this is normally an address, not a raw public key. The worker verifies the SIWE signature by recovering the signer address and comparing it to this allowlist.
+For EVM wallets this is normally an address, not a raw public key. The worker verifies SIWE signatures by recovering the signer address. `AUTOPAY_ADMIN_OWNER` can sign in to the dashboard and add account wallet mappings for other owners.
 
 Run locally:
 
@@ -191,6 +197,10 @@ Use the returned `headers` to retry the original paid request.
 ```http
 GET /api/health
 GET /api/capabilities
+GET /api/account
+PUT /api/account/autopay-wallet
+GET /api/admin/accounts
+POST /api/admin/accounts
 POST /api/auth/requests
 GET /api/auth/requests/{request_id}
 GET /api/auth/requests/{request_id}/poll

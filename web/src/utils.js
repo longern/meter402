@@ -1,6 +1,5 @@
 export function readableError(error) {
   if (error instanceof Error && error.message) return error.message;
-  if (error?.error?.message) return error.error.message;
   if (error?.message) return error.message;
   if (typeof error === "string") return error;
   try {

@@ -7,15 +7,22 @@ import { privateKeyToAccount } from "viem/accounts";
 
 type Env = {
   DB: D1Database;
-  AUTOPAY_PRIVATE_KEY?: string;
-  AUTOPAY_WALLETS?: string;
-  AUTOPAY_ALLOWED_OWNERS?: string;
+  AUTOPAY_ADMIN_PRIVATE_KEY?: string;
+  AUTOPAY_ADMIN_OWNER?: string;
+  AUTOPAY_SECRET?: string;
   AUTOPAY_AUTH_SESSIONS: DurableObjectNamespace;
 };
 
 type PayerWallet = {
   privateKey: Hex;
-  ownerAddresses: Address[];
+};
+
+type AccountWallet = {
+  owner: Address;
+  autopayWalletAddress: Address;
+  encryptedPrivateKey: string;
+  createdAt: string;
+  updatedAt: string;
 };
 
 type AutopayCapability = {
@@ -322,7 +329,7 @@ export default {
 
       if (request.method === "GET" && url.pathname === "/api/capabilities") {
         const requestedOwner = parseOptionalAddress(url.searchParams.get("owner"));
-        const payerWallet = requestedOwner ? getPayerWalletForOwner(env, requestedOwner) : getDefaultPayerWallet(env);
+        const payerWallet = requestedOwner ? await getPayerWalletForOwner(env, requestedOwner) : getDefaultPayerWallet(env);
         return jsonResponse({
           authorization: "siwe_device_flow",
           capability_resource_prefix: CAPABILITY_PREFIX,
@@ -330,9 +337,7 @@ export default {
           payment_requirement_resource_prefix: PAYMENT_REQUIREMENT_PREFIX,
           login_resource_prefix: LOGIN_PREFIX,
           x402_networks: ["eip155:8453"],
-          allowed_owner_addresses: getAllowedOwners(env),
           payer_address: payerWallet ? privateKeyToAccount(payerWallet.privateKey).address : null,
-          payer_wallets: listPayerWallets(env),
           storage: "durable_object",
         });
       }
@@ -366,6 +371,22 @@ export default {
 
       if (request.method === "GET" && url.pathname === "/api/auth/me") {
         return await handleAuthMe(request, env);
+      }
+
+      if (url.pathname === "/api/account" && request.method === "GET") {
+        return await handleAccountGet(request, env);
+      }
+
+      if (url.pathname === "/api/account/autopay-wallet" && request.method === "PUT") {
+        return await handleAccountAutopayWalletUpdate(request, env);
+      }
+
+      if (url.pathname === "/api/admin/accounts" && request.method === "GET") {
+        return await handleAdminAccountsList(request, env);
+      }
+
+      if (url.pathname === "/api/admin/accounts" && request.method === "POST") {
+        return await handleAdminAccountCreate(request, env);
       }
 
       if (request.method === "GET" && url.pathname === "/api/audit/authorizations") {
@@ -669,7 +690,7 @@ async function createPayment(
     throw new HttpError(403, "missing_autopay_capability", "Payment authorization must include an autopay capability.");
   }
 
-  const payerWallet = getPayerWalletForOwner(env, authorization.owner);
+  const payerWallet = await getPayerWalletForOwner(env, authorization.owner);
   const selectedRequirement = preselectedRequirement ?? selectRequirement(paymentRequired, authorization.capability);
   const filteredPaymentRequired: PaymentRequired = {
     ...paymentRequired,
@@ -749,8 +770,7 @@ async function verifyAuthorization(
   }
 
   const owner = getAddress(parsed.address);
-  const allowedOwners = getAllowedOwners(env);
-  if (!allowedOwners.map(normalizeAddress).includes(normalizeAddress(owner))) {
+  if (!(await isKnownOwner(env, owner))) {
     throw new HttpError(403, "owner_not_allowed", "SIWE signer is not allowed to authorize this worker.");
   }
 
@@ -1077,12 +1097,19 @@ async function parsePaymentRequiredResponse(response: Response): Promise<Payment
   return normalizePaymentRequired((body as Record<string, unknown>)?.paymentRequired ?? (body as Record<string, unknown>)?.payment_required ?? body);
 }
 
-function getAllowedOwners(env: Env): Address[] {
-  if (!env.AUTOPAY_ALLOWED_OWNERS?.trim()) return [];
-  return env.AUTOPAY_ALLOWED_OWNERS.split(",")
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .map((address) => getAddress(address));
+function getAdminOwner(env: Env): Address | null {
+  return env.AUTOPAY_ADMIN_OWNER?.trim()
+    ? getAddress(env.AUTOPAY_ADMIN_OWNER.trim())
+    : null;
+}
+
+function isAdminOwner(env: Env, owner: string): boolean {
+  const adminOwner = getAdminOwner(env);
+  return Boolean(adminOwner && normalizeAddress(adminOwner) === normalizeAddress(owner));
+}
+
+async function isKnownOwner(env: Env, owner: Address): Promise<boolean> {
+  return isAdminOwner(env, owner) || Boolean(await getAccountWallet(env, owner));
 }
 
 function normalizeProxyHeaders(value: unknown): Headers {
@@ -1242,16 +1269,32 @@ function extractResourceValue(siwe: SiweMessage, prefix: string): string | undef
 }
 
 function base64UrlEncode(value: string): string {
-  const bytes = new TextEncoder().encode(value);
+  return base64UrlEncodeBytes(new TextEncoder().encode(value));
+}
+
+function base64UrlEncodeBytes(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
 function base64UrlDecode(value: string): string {
+  return new TextDecoder().decode(base64UrlDecodeBytes(value));
+}
+
+function base64UrlDecodeText(value: string): string {
+  return new TextDecoder().decode(base64UrlDecodeBytes(value));
+}
+
+function base64UrlDecodeBytes(value: string): Uint8Array {
   const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
   const padded = normalized.padEnd(normalized.length + ((4 - normalized.length % 4) % 4), "=");
-  return atob(padded);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
 }
 
 function bigintCompare(a: bigint, b: bigint): number {
@@ -1324,78 +1367,39 @@ function parseJsonObject(text: string): Record<string, unknown> {
 }
 
 function requirePrivateKey(env: Env): Hex {
-  const key = env.AUTOPAY_PRIVATE_KEY;
+  const key = env.AUTOPAY_ADMIN_PRIVATE_KEY;
   if (!key || !/^0x[0-9a-fA-F]{64}$/.test(key)) {
-    throw new HttpError(500, "missing_private_key", "AUTOPAY_PRIVATE_KEY is not configured.");
+    throw new HttpError(500, "missing_private_key", "AUTOPAY_ADMIN_PRIVATE_KEY is not configured.");
   }
   return key as Hex;
 }
 
-function getPayerWalletForOwner(env: Env, owner: Address): PayerWallet {
-  const wallets = getConfiguredPayerWallets(env);
-  const ownerKey = normalizeAddress(owner);
-  const matches = wallets.filter((wallet) => {
-    if (wallet.ownerAddresses.length === 0) return wallets.length === 1;
-    return wallet.ownerAddresses.map(normalizeAddress).includes(ownerKey);
-  });
-  if (matches.length === 1) return matches[0];
-  if (matches.length > 1) {
-    throw new HttpError(500, "ambiguous_payer_wallet", "Multiple payer wallets are configured for this owner.");
+async function getPayerWalletForOwner(env: Env, owner: Address): Promise<PayerWallet> {
+  const accountWallet = await getAccountWallet(env, owner);
+  if (accountWallet) {
+    return {
+      privateKey: await decryptPrivateKey(env, accountWallet.encryptedPrivateKey),
+    };
+  }
+
+  if (isAdminOwner(env, owner)) {
+    return { privateKey: requirePrivateKey(env) };
   }
   throw new HttpError(403, "payer_wallet_not_found", "No payer wallet is configured for this owner.");
 }
 
 function getDefaultPayerWallet(env: Env): PayerWallet | null {
-  const wallets = getConfiguredPayerWallets(env);
-  return wallets.length === 1 ? wallets[0] : null;
-}
-
-function listPayerWallets(env: Env): Array<{ address: Address; owner_addresses: Address[] }> {
-  return getConfiguredPayerWallets(env).map((wallet) => ({
-    address: privateKeyToAccount(wallet.privateKey).address,
-    owner_addresses: wallet.ownerAddresses,
-  }));
-}
-
-function getConfiguredPayerWallets(env: Env): PayerWallet[] {
-  if (env.AUTOPAY_WALLETS?.trim()) {
-    const parsed = parseAutopayWallets(env.AUTOPAY_WALLETS);
-    if (parsed.length > 0) return parsed;
-  }
-  return [{
-    privateKey: requirePrivateKey(env),
-    ownerAddresses: getAllowedOwners(env),
-  }];
-}
-
-function parseAutopayWallets(value: string): PayerWallet[] {
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(value);
-  } catch {
-    throw new HttpError(500, "invalid_autopay_wallets", "AUTOPAY_WALLETS must be valid JSON.");
+    return { privateKey: requirePrivateKey(env) };
+  } catch (error) {
+    if (error instanceof HttpError && error.code === "missing_private_key") return null;
+    throw error;
   }
-  if (!Array.isArray(parsed)) {
-    throw new HttpError(500, "invalid_autopay_wallets", "AUTOPAY_WALLETS must be a JSON array.");
-  }
-  return parsed.map((item) => {
-    if (!item || typeof item !== "object") {
-      throw new HttpError(500, "invalid_autopay_wallets", "Each AUTOPAY_WALLETS entry must be an object.");
-    }
-    const input = item as Record<string, unknown>;
-    const privateKey = normalizePrivateKey(input.privateKey ?? input.private_key);
-    const ownerInput = input.ownerAddresses ?? input.owner_addresses ?? input.ownerAddress ?? input.owner_address ?? [];
-    const ownerValues = Array.isArray(ownerInput) ? ownerInput : ownerInput ? [ownerInput] : [];
-    return {
-      privateKey,
-      ownerAddresses: ownerValues.map((owner) => parseConfigAddress(owner, "owner_address")),
-    };
-  });
 }
 
-function normalizePrivateKey(value: unknown): Hex {
+function parsePrivateKey(value: unknown, field: string): Hex {
   if (typeof value !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(value)) {
-    throw new HttpError(500, "invalid_autopay_wallets", "Each AUTOPAY_WALLETS privateKey must be a valid EVM private key.");
+    throw new HttpError(400, "invalid_private_key", `${field} must be a valid EVM private key.`);
   }
   return value as Hex;
 }
@@ -1408,13 +1412,6 @@ function parseOptionalAddress(value: unknown): Address | null {
 function parseAddress(value: unknown, field: string): Address {
   if (typeof value !== "string" || !/^0x[a-fA-F0-9]{40}$/.test(value)) {
     throw new HttpError(400, "invalid_address", `${field} must be a valid EVM address.`);
-  }
-  return getAddress(value);
-}
-
-function parseConfigAddress(value: unknown, field: string): Address {
-  if (typeof value !== "string" || !/^0x[a-fA-F0-9]{40}$/.test(value)) {
-    throw new HttpError(500, "invalid_autopay_wallets", `Each AUTOPAY_WALLETS ${field} must be a valid EVM address.`);
   }
   return getAddress(value);
 }
@@ -1471,9 +1468,9 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
 function errorResponse(status: number, code: string, message: string): Response {
   return jsonResponse({
     error: {
-      type: status === 402 ? "payment_required" : "api_error",
       code,
       message,
+      details: {},
     },
   }, { status });
 }
@@ -1502,7 +1499,12 @@ class HttpError extends Error {
 /* ─── Session helpers ─── */
 
 const SESSION_COOKIE_NAME = "autopay_session";
-const SESSION_TTL_DAYS = 7;
+const SESSION_TTL_SECONDS = 24 * 60 * 60;
+
+type DashboardSession = {
+  owner: Address;
+  expires_at: number;
+};
 
 function parseCookieHeader(request: Request): Record<string, string> {
   const cookie = request.headers.get("cookie");
@@ -1521,11 +1523,13 @@ async function getSessionOwner(request: Request, env: Env): Promise<string | nul
   const cookies = parseCookieHeader(request);
   const token = cookies[SESSION_COOKIE_NAME];
   if (!token) return null;
-  const row = await env.DB.prepare(
-    `SELECT owner FROM autopay_sessions
-     WHERE token = ? AND revoked_at IS NULL AND expires_at > ?`
-  ).bind(token, new Date().toISOString()).first<{ owner: string }>();
-  return row?.owner ?? null;
+  try {
+    const session = await verifyDashboardSession(env, token);
+    return session.owner;
+  } catch (error) {
+    if (error instanceof HttpError && error.status >= 500) throw error;
+    return null;
+  }
 }
 
 async function requireSession(request: Request, env: Env): Promise<string> {
@@ -1536,7 +1540,7 @@ async function requireSession(request: Request, env: Env): Promise<string> {
   return owner;
 }
 
-function setSessionCookie(token: string, maxAgeSeconds = SESSION_TTL_DAYS * 86400): string {
+function setSessionCookie(token: string, maxAgeSeconds = SESSION_TTL_SECONDS): string {
   const parts = [
     `${encodeURIComponent(SESSION_COOKIE_NAME)}=${encodeURIComponent(token)}`,
     "Path=/",
@@ -1561,42 +1565,189 @@ function clearSessionCookie(): string {
 }
 
 async function createSession(env: Env, owner: string): Promise<string> {
-  // Ensure table exists (migration may not have been applied remotely)
-  try {
-    await env.DB.prepare(`
-      CREATE TABLE IF NOT EXISTS autopay_sessions (
-        id TEXT PRIMARY KEY,
-        owner TEXT NOT NULL,
-        token TEXT NOT NULL UNIQUE,
-        created_at TEXT NOT NULL,
-        expires_at TEXT NOT NULL,
-        revoked_at TEXT
-      )
-    `).run();
-    await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_autopay_sessions_token ON autopay_sessions(token)`).run();
-    await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_autopay_sessions_owner ON autopay_sessions(owner)`).run();
-  } catch {
-    // Ignore errors — table likely already exists
-  }
-
-  const id = crypto.randomUUID();
-  const token = randomToken(48);
-  const now = new Date().toISOString();
-  const expiresAt = new Date(Date.now() + SESSION_TTL_DAYS * 86400_000).toISOString();
-  await env.DB.prepare(
-    `INSERT INTO autopay_sessions (id, owner, token, created_at, expires_at)
-     VALUES (?, ?, ?, ?, ?)`
-  ).bind(id, getAddress(owner), token, now, expiresAt).run();
-  return token;
+  return signDashboardSession(env, {
+    owner: getAddress(owner),
+    expires_at: Date.now() + SESSION_TTL_SECONDS * 1000,
+  });
 }
 
-async function revokeSession(request: Request, env: Env): Promise<void> {
-  const cookies = parseCookieHeader(request);
-  const token = cookies[SESSION_COOKIE_NAME];
-  if (!token) return;
+async function signDashboardSession(env: Env, state: DashboardSession): Promise<string> {
+  const payload = base64UrlEncode(canonicalJson(state));
+  const signature = await hmacSha256Base64Url(requireSessionSecret(env), payload);
+  return `${payload}.${signature}`;
+}
+
+async function verifyDashboardSession(env: Env, token: string): Promise<DashboardSession> {
+  const [payload, signature, extra] = token.split(".");
+  if (!payload || !signature || extra != null) {
+    throw new HttpError(401, "invalid_session", "Session is invalid.");
+  }
+  const expected = await hmacSha256Base64Url(requireSessionSecret(env), payload);
+  if (!constantTimeEqual(signature, expected)) {
+    throw new HttpError(401, "invalid_session_signature", "Session signature is invalid.");
+  }
+  const parsed = JSON.parse(base64UrlDecodeText(payload)) as Record<string, unknown>;
+  const expiresAt = typeof parsed.expires_at === "number" ? parsed.expires_at : 0;
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+    throw new HttpError(401, "session_expired", "Session has expired.");
+  }
+  return {
+    owner: parseAddress(parsed.owner, "owner"),
+    expires_at: expiresAt,
+  };
+}
+
+function requireSessionSecret(env: Env): string {
+  return requireAutopaySecret(env);
+}
+
+async function hmacSha256Base64Url(secret: string, value: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(value));
+  return base64UrlEncodeBytes(new Uint8Array(signature));
+}
+
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let index = 0; index < a.length; index += 1) {
+    diff |= a.charCodeAt(index) ^ b.charCodeAt(index);
+  }
+  return diff === 0;
+}
+
+async function ensureAccountTable(env: Env): Promise<void> {
+  await env.DB.prepare(`
+    CREATE TABLE IF NOT EXISTS autopay_accounts (
+      owner TEXT PRIMARY KEY,
+      autopay_wallet_address TEXT NOT NULL,
+      encrypted_autopay_private_key TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  `).run();
+}
+
+async function getAccountWallet(env: Env, owner: Address): Promise<AccountWallet | null> {
+  await ensureAccountTable(env);
+  const row = await env.DB.prepare(
+    `SELECT owner, autopay_wallet_address, encrypted_autopay_private_key, created_at, updated_at
+     FROM autopay_accounts
+     WHERE owner = ?`
+  ).bind(getAddress(owner)).first<{
+    owner: string;
+    autopay_wallet_address: string;
+    encrypted_autopay_private_key: string;
+    created_at: string;
+    updated_at: string;
+  }>();
+  if (!row) return null;
+  return {
+    owner: getAddress(row.owner),
+    autopayWalletAddress: getAddress(row.autopay_wallet_address),
+    encryptedPrivateKey: row.encrypted_autopay_private_key,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+async function listAccountWallets(env: Env): Promise<Array<{
+  owner: Address;
+  autopay_wallet_address: Address;
+  created_at: string;
+  updated_at: string;
+}>> {
+  await ensureAccountTable(env);
+  const { results } = await env.DB.prepare(
+    `SELECT owner, autopay_wallet_address, created_at, updated_at
+     FROM autopay_accounts
+     ORDER BY updated_at DESC`
+  ).all<{
+    owner: string;
+    autopay_wallet_address: string;
+    created_at: string;
+    updated_at: string;
+  }>();
+  return (results ?? []).map((row) => ({
+    owner: getAddress(row.owner),
+    autopay_wallet_address: getAddress(row.autopay_wallet_address),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  }));
+}
+
+async function saveAccountWallet(env: Env, owner: Address, privateKey: Hex): Promise<AccountWallet> {
+  await ensureAccountTable(env);
+  const autopayWalletAddress = privateKeyToAccount(privateKey).address;
+  const encryptedPrivateKey = await encryptPrivateKey(env, privateKey);
+  const now = new Date().toISOString();
   await env.DB.prepare(
-    `UPDATE autopay_sessions SET revoked_at = ? WHERE token = ?`
-  ).bind(new Date().toISOString(), token).run();
+    `INSERT INTO autopay_accounts
+      (owner, autopay_wallet_address, encrypted_autopay_private_key, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(owner) DO UPDATE SET
+      autopay_wallet_address = excluded.autopay_wallet_address,
+      encrypted_autopay_private_key = excluded.encrypted_autopay_private_key,
+      updated_at = excluded.updated_at`
+  ).bind(getAddress(owner), autopayWalletAddress, encryptedPrivateKey, now, now).run();
+  return {
+    owner: getAddress(owner),
+    autopayWalletAddress,
+    encryptedPrivateKey,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+async function encryptPrivateKey(env: Env, privateKey: Hex): Promise<string> {
+  const iv = new Uint8Array(12);
+  crypto.getRandomValues(iv);
+  const key = await getAccountCryptoKey(env);
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    new TextEncoder().encode(privateKey),
+  );
+  return `v1.${base64UrlEncodeBytes(iv)}.${base64UrlEncodeBytes(new Uint8Array(ciphertext))}`;
+}
+
+async function decryptPrivateKey(env: Env, encryptedPrivateKey: string): Promise<Hex> {
+  const [version, ivEncoded, ciphertextEncoded, extra] = encryptedPrivateKey.split(".");
+  if (version !== "v1" || !ivEncoded || !ciphertextEncoded || extra != null) {
+    throw new HttpError(500, "invalid_encrypted_private_key", "Stored autopay wallet key is invalid.");
+  }
+  const key = await getAccountCryptoKey(env);
+  const iv = base64UrlDecodeBytes(ivEncoded);
+  const ciphertext = base64UrlDecodeBytes(ciphertextEncoded);
+  const plaintext = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: bytesToArrayBuffer(iv) },
+    key,
+    bytesToArrayBuffer(ciphertext),
+  );
+  return parsePrivateKey(new TextDecoder().decode(plaintext), "stored_private_key");
+}
+
+async function getAccountCryptoKey(env: Env): Promise<CryptoKey> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(requireAutopaySecret(env)));
+  return crypto.subtle.importKey("raw", digest, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+}
+
+function requireAutopaySecret(env: Env): string {
+  const secret = env.AUTOPAY_SECRET;
+  if (!secret || secret.length < 32) {
+    throw new HttpError(500, "missing_autopay_secret", "AUTOPAY_SECRET must be configured with at least 32 characters.");
+  }
+  return secret;
+}
+
+function bytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
 /* ─── Auth endpoints ─── */
@@ -1666,9 +1817,8 @@ async function handleAuthLogin(request: Request, env: Env): Promise<Response> {
   }
 
   const owner = getAddress(siwe.address);
-  const allowedOwners = getAllowedOwners(env);
-  if (allowedOwners.length > 0 && !allowedOwners.includes(owner)) {
-    throw new HttpError(403, "owner_not_allowed", "This wallet address is not in the allowlist.");
+  if (!(await isKnownOwner(env, owner))) {
+    throw new HttpError(403, "owner_not_allowed", "This wallet address is not configured.");
   }
 
   const token = await createSession(env, owner);
@@ -1685,7 +1835,6 @@ async function handleAuthLogin(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleAuthLogout(request: Request, env: Env): Promise<Response> {
-  await revokeSession(request, env);
   const headers = new Headers(JSON_HEADERS);
   for (const [key, value] of Object.entries(CORS_HEADERS)) {
     headers.set(key, value);
@@ -1699,7 +1848,58 @@ async function handleAuthMe(request: Request, env: Env): Promise<Response> {
   return jsonResponse({
     authenticated: Boolean(owner),
     owner: owner ?? null,
+    is_admin: owner ? isAdminOwner(env, owner) : false,
   });
+}
+
+async function handleAccountGet(request: Request, env: Env): Promise<Response> {
+  const owner = getAddress(await requireSession(request, env));
+  const account = await getAccountWallet(env, owner);
+  return jsonResponse({
+    owner,
+    autopay_wallet_address: account?.autopayWalletAddress ?? null,
+    autopay_wallet_configured: Boolean(account),
+  });
+}
+
+async function handleAccountAutopayWalletUpdate(request: Request, env: Env): Promise<Response> {
+  const owner = getAddress(await requireSession(request, env));
+  const body = await readJsonObject(request);
+  const privateKey = parsePrivateKey(body.privateKey ?? body.private_key, "private_key");
+  const account = await saveAccountWallet(env, owner, privateKey);
+  return jsonResponse({
+    owner: account.owner,
+    autopay_wallet_address: account.autopayWalletAddress,
+    autopay_wallet_configured: true,
+  });
+}
+
+async function requireAdminSession(request: Request, env: Env): Promise<Address> {
+  const owner = getAddress(await requireSession(request, env));
+  if (!isAdminOwner(env, owner)) {
+    throw new HttpError(403, "admin_required", "Admin access is required.");
+  }
+  return owner;
+}
+
+async function handleAdminAccountsList(request: Request, env: Env): Promise<Response> {
+  await requireAdminSession(request, env);
+  return jsonResponse({
+    accounts: await listAccountWallets(env),
+  });
+}
+
+async function handleAdminAccountCreate(request: Request, env: Env): Promise<Response> {
+  await requireAdminSession(request, env);
+  const body = await readJsonObject(request);
+  const owner = parseAddress(body.owner ?? body.owner_address ?? body.main_wallet_address, "owner");
+  const privateKey = parsePrivateKey(body.privateKey ?? body.private_key ?? body.autopay_private_key, "autopay_private_key");
+  const account = await saveAccountWallet(env, owner, privateKey);
+  return jsonResponse({
+    owner: account.owner,
+    autopay_wallet_address: account.autopayWalletAddress,
+    autopay_wallet_configured: true,
+  }, { status: 201 });
 }
 
 /* ─── Audit endpoints (protected) ─── */

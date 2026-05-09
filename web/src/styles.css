@@ -857,6 +857,53 @@ textarea {
   font-size: 14px;
 }
 
+.activation-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 24px;
+  align-items: end;
+  margin-top: 0;
+  padding: 22px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.activation-panel h2 {
+  margin-bottom: 8px;
+  font-size: 22px;
+}
+
+.activation-panel p {
+  max-width: 620px;
+  margin-bottom: 0;
+}
+
+.activation-owner {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 18px;
+  color: #6b7280;
+  font-size: 13px;
+}
+
+.activation-owner strong {
+  color: #111827;
+  font:
+    13px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Consolas,
+    monospace;
+}
+
+.activation-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .modal-layer {
   position: fixed;
   z-index: 50;
@@ -1351,6 +1398,20 @@ textarea {
 
   .console-header {
     display: block;
+  }
+
+  .activation-panel {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 18px;
+    padding: 18px;
+  }
+
+  .activation-actions {
+    justify-content: stretch;
+  }
+
+  .activation-actions button {
+    width: 100%;
   }
 
   .console-identity {

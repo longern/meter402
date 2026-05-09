@@ -53,14 +53,10 @@ CREATE INDEX idx_autopay_payments_capability ON autopay_payments(capability_hash
 CREATE UNIQUE INDEX idx_autopay_payments_requester_nonce
   ON autopay_payments(requester_account, requester_nonce);
 
-CREATE TABLE autopay_sessions (
-  id TEXT PRIMARY KEY,
-  owner TEXT NOT NULL,
-  token TEXT NOT NULL UNIQUE,
+CREATE TABLE autopay_accounts (
+  owner TEXT PRIMARY KEY,
+  autopay_wallet_address TEXT NOT NULL,
+  encrypted_autopay_private_key TEXT NOT NULL,
   created_at TEXT NOT NULL,
-  expires_at TEXT NOT NULL,
-  revoked_at TEXT
+  updated_at TEXT NOT NULL
 );
-
-CREATE INDEX idx_autopay_sessions_token ON autopay_sessions(token);
-CREATE INDEX idx_autopay_sessions_owner ON autopay_sessions(owner);

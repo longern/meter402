@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import CardSection from "./CardSection";
+import { normalizeApiError } from "./apiError";
 
 function readableError(error) {
   if (error instanceof Error && error.message) return error.message;
-  if (error?.error?.message) return error.error.message;
   if (error?.message) return error.message;
   if (typeof error === "string") return error;
   try {
@@ -18,7 +18,7 @@ async function fetchJson(path, options = {}) {
   const response = await fetch(path, options);
   const text = await response.text();
   const json = text ? JSON.parse(text) : null;
-  if (!response.ok) throw json || new Error(`Request failed with HTTP ${response.status}`);
+  if (!response.ok) throw normalizeApiError(json, response.status);
   return json;
 }
 

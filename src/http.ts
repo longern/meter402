@@ -34,10 +34,9 @@ export function corsPreflightResponse(request: Request): Response {
 export function errorResponse(status: number, code: string, message: string, extra: Record<string, unknown> = {}): Response {
   return jsonResponse({
     error: {
-      type: status === 402 ? "payment_required" : "api_error",
       code,
       message,
-      ...extra,
+      details: extra,
     },
   }, { status });
 }

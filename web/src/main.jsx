@@ -3,11 +3,13 @@ import { createRoot } from "react-dom/client";
 import QRCode from "qrcode";
 import PayDepositPage from "./PayDepositPage";
 import { LoginPage, WalletLoginPage } from "./LoginPage";
+import DepositDialog from "./DepositDialog";
 import RechargeView from "./views/RechargeView";
 import KeysView from "./views/KeysView";
 import UsageView from "./views/UsageView";
 import AutopayView from "./views/AutopayView";
 import { GATEWAY_PROVIDERS } from "./gatewayProviders";
+import { normalizeApiError } from "./apiError";
 import {
   readableError,
   shortAddress,
@@ -169,6 +171,7 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
   const [editEndpointOpen, setEditEndpointOpen] = useState(false);
   const [depositDialogOpen, setDepositDialogOpen] = useState(false);
   const [account, setAccount] = useState(null);
+  const [accountMissing, setAccountMissing] = useState(false);
   const [apiKeys, setApiKeys] = useState([]);
   const [lastInvoices, setLastInvoices] = useState([]);
   const [deposits, setDeposits] = useState([]);
@@ -196,30 +199,35 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
   }, [initialIdentity?.owner, initialIdentity?.autopay_url]);
 
   useEffect(() => {
-    if (activeView === "recharge" && identity?.owner) {
-      loadAutopayWalletBalance();
+    if (identity?.owner) {
       loadAccount();
+    }
+  }, [identity?.owner]);
+
+  useEffect(() => {
+    if (activeView === "recharge" && identity?.owner && account) {
+      loadAutopayWalletBalance();
       loadDeposits();
     }
-  }, [activeView, identity?.owner]);
+  }, [activeView, identity?.owner, account?.account_id]);
 
   useEffect(() => {
-    if (activeView === "autopay" && identity?.owner) {
+    if (activeView === "autopay" && identity?.owner && account) {
       loadCapabilities();
     }
-  }, [activeView, identity?.owner]);
+  }, [activeView, identity?.owner, account?.account_id]);
 
   useEffect(() => {
-    if (activeView === "keys" && identity?.owner) {
+    if (activeView === "keys" && identity?.owner && account) {
       loadApiKeys();
     }
-  }, [activeView, identity?.owner]);
+  }, [activeView, identity?.owner, account?.account_id]);
 
   useEffect(() => {
-    if (activeView === "usage" && identity?.owner) {
+    if (activeView === "usage" && identity?.owner && account) {
       loadRequests().then(loadInvoices);
     }
-  }, [activeView, identity?.owner]);
+  }, [activeView, identity?.owner, account?.account_id]);
 
   function show(value) {
     setOutput(typeof value === "string" ? value : JSON.stringify(value, null, 2));
@@ -230,7 +238,7 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
     const response = await fetch(path, { ...options, headers });
     const text = await response.text();
     const json = text ? JSON.parse(text) : null;
-    if (!response.ok) throw json;
+    if (!response.ok) throw normalizeApiError(json, response.status);
     return json;
   }
 
@@ -389,11 +397,30 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
   }
 
   async function loadAccount() {
-    await withBusy("loadAccount", async () => {
+    setBusy("loadAccount");
+    try {
       const json = await request("/api/account");
       setAccount(json);
+      setAccountMissing(false);
       show(json);
-    });
+    } catch (error) {
+      if (isAccountNotFound(error)) {
+        setAccount(null);
+        setAccountMissing(true);
+        setDeposits([]);
+        setApiKeys([]);
+        setRequests([]);
+        setLastInvoices([]);
+        setCapabilities([]);
+        setAutopayWalletBalance(null);
+        setAutopayWalletBalanceError("");
+        show({ status: "account_activation_required", owner: identity?.owner });
+      } else {
+        show(readableError(error));
+      }
+    } finally {
+      setBusy("");
+    }
   }
 
   async function loadApiKeys() {
@@ -765,11 +792,25 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
 
         <div className="console-header">
           <div>
-            <h1>{activeItem.label}</h1>
+            <h1>{accountMissing ? "Activate account" : activeItem.label}</h1>
           </div>
         </div>
 
-        {activeView === "recharge" && (
+        {accountMissing ? (
+          <ActivationView
+            identity={identity}
+            isBusy={isBusy}
+            openDepositDialog={openDepositDialog}
+            depositDialogOpen={depositDialogOpen}
+            closeDepositDialog={closeDepositDialog}
+            request={request}
+            withBusy={withBusy}
+            show={show}
+            setNewApiKey={setNewApiKey}
+            loadAccount={loadAccount}
+            waitForAutopayAuthorization={waitForAutopayAuthorization}
+          />
+        ) : activeView === "recharge" && (
           <RechargeView
             account={account}
             deposits={deposits}
@@ -800,7 +841,7 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
           />
         )}
 
-        {activeView === "keys" && (
+        {!accountMissing && activeView === "keys" && (
           <KeysView
             apiKeys={apiKeys}
             isBusy={isBusy}
@@ -823,7 +864,7 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
           />
         )}
 
-        {activeView === "usage" && (
+        {!accountMissing && activeView === "usage" && (
           <UsageView
             requests={requests}
             lastInvoices={lastInvoices}
@@ -835,7 +876,7 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
           />
         )}
 
-        {activeView === "autopay" && (
+        {!accountMissing && activeView === "autopay" && (
           <AutopayView
             capabilities={capabilities}
             capabilitiesLoading={capabilitiesLoading}
@@ -864,6 +905,62 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
   );
 }
 
+function ActivationView({
+  identity,
+  isBusy,
+  openDepositDialog,
+  depositDialogOpen,
+  closeDepositDialog,
+  request,
+  withBusy,
+  show,
+  setNewApiKey,
+  loadAccount,
+  waitForAutopayAuthorization,
+}) {
+  return (
+    <>
+      <section className="activation-panel">
+        <div>
+          <p className="eyebrow">Account setup</p>
+          <h2>Activate your account</h2>
+          <p>
+            Make your first deposit to create the account, enable API keys, and start metered gateway usage.
+          </p>
+          <div className="activation-owner">
+            <span>Main wallet</span>
+            <strong>{identity?.owner ? shortAddress(identity.owner) : "Not connected"}</strong>
+          </div>
+        </div>
+        <div className="activation-actions">
+          <button disabled={isBusy} className="primary" onClick={openDepositDialog}>
+            Add deposit
+          </button>
+        </div>
+      </section>
+
+      {depositDialogOpen && (
+        <DepositDialog
+          open={depositDialogOpen}
+          onClose={closeDepositDialog}
+          request={request}
+          withBusy={withBusy}
+          isBusy={isBusy}
+          show={show}
+          identity={identity}
+          setNewApiKey={setNewApiKey}
+          waitForAutopayAuthorization={waitForAutopayAuthorization}
+          loadAccount={loadAccount}
+        />
+      )}
+    </>
+  );
+}
+
+function isAccountNotFound(error) {
+  return error && typeof error === "object" && error.code === "account_not_found";
+}
+
 async function fetchSession() {
   return await fetchJson("/api/session");
 }
@@ -872,7 +969,7 @@ async function fetchJson(path, options = {}) {
   const response = await fetch(path, options);
   const text = await response.text();
   const json = text ? JSON.parse(text) : null;
-  if (!response.ok) throw json || new Error(`Request failed with HTTP ${response.status}`);
+  if (!response.ok) throw normalizeApiError(json, response.status);
   return json;
 }
 

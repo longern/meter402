@@ -1,12 +1,13 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
+import AdminDashboard from "./AdminDashboard.jsx";
+import { normalizeApiError } from "./apiError.js";
 import "./styles.css";
 
 const requestId = new URLSearchParams(window.location.search).get("request_id") || "";
 
 function App() {
   const [authRequest, setAuthRequest] = useState(null);
-  const [allowedOwners, setAllowedOwners] = useState([]);
   const [ownerAddress, setOwnerAddress] = useState("");
   const [activeProvider, setActiveProvider] = useState(null);
   const [walletStatus, setWalletStatus] = useState("");
@@ -17,22 +18,19 @@ function App() {
   // Session + dashboard state
   const [session, setSession] = useState(null); // { owner } or null
   const [checkingSession, setCheckingSession] = useState(true);
+  const [pageMode, setPageMode] = useState("dashboard");
   const [activeTab, setActiveTab] = useState("authorizations");
   const [auditAuth, setAuditAuth] = useState([]);
   const [auditPay, setAuditPay] = useState([]);
   const [auditBusy, setAuditBusy] = useState(false);
   const [autopayWalletAddress, setAutopayWalletAddress] = useState("");
+  const [autopayPrivateKey, setAutopayPrivateKey] = useState("");
+  const [accountBusy, setAccountBusy] = useState(false);
 
   const [hasWallet, setHasWallet] = useState(false);
 
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState(false);
-
-  const ownerAllowed = useMemo(() => {
-    if (!ownerAddress || allowedOwners.length === 0) return true;
-    const owner = ownerAddress.toLowerCase();
-    return allowedOwners.map((item) => item.toLowerCase()).includes(owner);
-  }, [allowedOwners, ownerAddress]);
 
   useEffect(() => {
     init().catch(showError);
@@ -49,15 +47,11 @@ function App() {
         setAuthLoading(true);
         setAuthError(false);
         try {
-          const [details, capabilities] = await Promise.all([
-            fetchJson(`/api/auth/requests/${encodeURIComponent(requestId)}`),
-            fetchJson("/api/capabilities"),
-          ]);
+          const details = await fetchJson(`/api/auth/requests/${encodeURIComponent(requestId)}`);
           setAuthRequest(details);
           if (details.status === "approved" || details.status === "denied") {
             setResult(details.status);
           }
-          setAllowedOwners(capabilities.allowed_owner_addresses || []);
           setWalletStatus("Connect an owner wallet to continue.");
           autoConnectWallet();
         } catch {
@@ -81,16 +75,14 @@ function App() {
       setWalletStatus("Connect an owner wallet to continue.");
       return;
     }
-    setWalletStatus(ownerAllowed
-      ? "Connected wallet is allowed to sign."
-      : "Connected wallet is not allowed to authorize this worker.");
-  }, [authRequest, ownerAddress, ownerAllowed]);
+    setWalletStatus("Connected wallet is ready to sign.");
+  }, [authRequest, ownerAddress]);
 
   // Auto-load audit when session exists and on dashboard
   useEffect(() => {
-    if (!session || requestId) return;
+    if (!session || requestId || pageMode !== "dashboard") return;
     loadAudit();
-  }, [session, activeTab]);
+  }, [session, activeTab, pageMode]);
 
   useEffect(() => {
     if (!session || requestId) return;
@@ -105,7 +97,7 @@ function App() {
     try {
       const me = await fetchJson("/api/auth/me");
       if (me.authenticated && me.owner) {
-        setSession({ owner: me.owner });
+        setSession({ owner: me.owner, is_admin: Boolean(me.is_admin) });
       } else {
         setSession(null);
       }
@@ -135,8 +127,27 @@ function App() {
   }
 
   async function loadDashboardCapabilities(owner) {
-    const data = await fetchJson(`/api/capabilities?owner=${encodeURIComponent(owner)}`);
-    setAutopayWalletAddress(data.payer_address || "");
+    const data = await fetchJson("/api/account");
+    setAutopayWalletAddress(data.autopay_wallet_address || "");
+  }
+
+  async function handleAutopayWalletSave(event) {
+    event.preventDefault();
+    setAccountBusy(true);
+    try {
+      const data = await fetchJson("/api/account/autopay-wallet", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ private_key: autopayPrivateKey.trim() }),
+      });
+      setAutopayWalletAddress(data.autopay_wallet_address || "");
+      setAutopayPrivateKey("");
+      setWalletStatus("Autopay wallet saved.");
+    } catch (err) {
+      showError(err);
+    } finally {
+      setAccountBusy(false);
+    }
   }
 
   async function handleLogin() {
@@ -173,6 +184,7 @@ function App() {
     try {
       await fetchJson("/api/auth/logout", { method: "POST" });
       setSession(null);
+      setPageMode("dashboard");
       setAuditAuth([]);
       setAuditPay([]);
       setAutopayWalletAddress("");
@@ -397,8 +409,18 @@ function App() {
       <>
         <div className="dashboard-topbar">
           <div className="dashboard-topbar-inner">
-            <h1>Autopay</h1>
+            <h1>{pageMode === "admin" ? "Admin" : "Autopay"}</h1>
             <div className="dashboard-account">
+              {session.is_admin && (
+                <button
+                  className="dashboard-mode-button"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setPageMode((current) => current === "admin" ? "dashboard" : "admin")}
+                >
+                  {pageMode === "admin" ? "Dashboard" : "Admin"}
+                </button>
+              )}
               <span className="dashboard-address">{shortAddress(session.owner)}</span>
               <button className="icon-button" type="button" aria-label="Sign out" disabled={busy} onClick={() => handleLogout()}>
                 <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -411,6 +433,11 @@ function App() {
           </div>
         </div>
 
+        {pageMode === "admin" ? (
+          <div className="content admin-content">
+            <AdminDashboard onStatus={setWalletStatus} />
+          </div>
+        ) : (
         <div className="content">
           <section className="dashboard-card autopay-wallet-card">
             <div className="section-heading">
@@ -419,6 +446,21 @@ function App() {
             </div>
             <strong className="wallet-address-large">{autopayWalletAddress ? shortAddress(autopayWalletAddress) : "Not configured"}</strong>
             {autopayWalletAddress && <p className="wallet-address-full">{autopayWalletAddress}</p>}
+            <form className="wallet-key-form" onSubmit={handleAutopayWalletSave}>
+              <label htmlFor="autopay-private-key">Private key</label>
+              <input
+                id="autopay-private-key"
+                type="password"
+                autoComplete="off"
+                spellCheck="false"
+                placeholder="0x..."
+                value={autopayPrivateKey}
+                onChange={(event) => setAutopayPrivateKey(event.target.value)}
+              />
+              <button type="submit" disabled={accountBusy || !autopayPrivateKey.trim()}>
+                {accountBusy ? "Saving..." : "Save"}
+              </button>
+            </form>
           </section>
 
           <section className="dashboard-card">
@@ -470,8 +512,10 @@ function App() {
                 ))}
               </div>
             )}
+
           </section>
         </div>
+        )}
       </>
     );
   };
@@ -736,7 +780,6 @@ function App() {
                 <h2>Wallet</h2>
                 <dl>
                   <dt>Owner wallet</dt><dd>{ownerAddress || "Not connected"}</dd>
-                  <dt>Allowed owners</dt><dd>{allowedOwners.length ? allowedOwners.join(", ") : "Any valid SIWE signer"}</dd>
                 </dl>
                 <div className="status">{walletStatus}</div>
               </section>
@@ -763,7 +806,7 @@ function App() {
                 <>
                   <button className="danger" disabled={busy || Boolean(result)} onClick={() => denyAuthorization().catch(showError)}>Deny</button>
                   {!ownerAddress && <button disabled={busy} onClick={() => connectWallet().catch(showError)}>Connect</button>}
-                  {ownerAddress && <button disabled={!Boolean(authRequest && ownerAddress && ownerAllowed && !busy && !result)} onClick={() => approveAuthorization().catch(showError)}>{isLogin ? "Sign in" : "Sign"}</button>}
+                  {ownerAddress && <button disabled={!Boolean(authRequest && ownerAddress && !busy && !result)} onClick={() => approveAuthorization().catch(showError)}>{isLogin ? "Sign in" : "Sign"}</button>}
                 </>
               )}
             </div>
@@ -791,8 +834,7 @@ async function fetchJson(url, init) {
   const response = await fetch(url, { ...init, credentials: "include" });
   const json = await response.json().catch(() => null);
   if (!response.ok) {
-    const message = readableErrorMessage(json?.error) || `Request failed with HTTP ${response.status}.`;
-    throw new Error(message);
+    throw normalizeApiError(json, response.status);
   }
   return json;
 }
@@ -812,7 +854,6 @@ function readableErrorMessage(error) {
       || readableString(value.shortMessage)
       || readableString(value.reason)
       || readableString(value.details)
-      || readableString(value.error?.message)
       || readableString(value.data?.message);
     if (nestedMessage) return nestedMessage;
     try {
@@ -830,7 +871,7 @@ function readableString(value) {
 
 function isUserRejectedRequest(error) {
   if (!error || typeof error !== "object") return false;
-  const code = error.code ?? error.error?.code ?? error.data?.code;
+  const code = error.code ?? error.data?.code;
   if (code === 4001 || code === "4001" || code === "ACTION_REJECTED") return true;
   const message = readableErrorMessage(error).toLowerCase();
   return message.includes("user rejected")

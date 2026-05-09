@@ -6,6 +6,7 @@ import {
   readableError,
   shortAddress,
 } from "./utils";
+import { normalizeApiError } from "./apiError";
 import styles from "./LoginPage.module.css";
 
 const LOGIN_SUCCESS_REDIRECT_DELAY_MS = 500;
@@ -444,7 +445,7 @@ async function fetchJson(path, options = {}) {
   const response = await fetch(path, options);
   const text = await response.text();
   const json = text ? JSON.parse(text) : null;
-  if (!response.ok) throw json || new Error(`Request failed with HTTP ${response.status}`);
+  if (!response.ok) throw normalizeApiError(json, response.status);
   return json;
 }
 

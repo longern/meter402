@@ -10,7 +10,7 @@ routes = [
 ]
 
 [vars]
-AUTOPAY_ALLOWED_OWNERS = "0x9bb3c3042df4fc0cfa441e0e9f7dc7aa25ea7ef1"
+AUTOPAY_ADMIN_OWNER = "0x9bb3c3042df4fc0cfa441e0e9f7dc7aa25ea7ef1"
 
 # D1 database ID needs to be set after creating the database via:
 #   npx wrangler d1 create meteria402_autopay_audit
