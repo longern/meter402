@@ -191,10 +191,10 @@ button {
 
 button:not(.primary):not(.secondary):not(.text-button):not(.icon-button):not(
     .modal-scrim
-  ):not(.sidebar-scrim):not(.approval-copy-button):hover,
+  ):not(.sidebar-scrim):not(.approval-copy-button):not(.address-copy-button):hover,
 button:not(.primary):not(.secondary):not(.text-button):not(.icon-button):not(
     .modal-scrim
-  ):not(.sidebar-scrim):not(.approval-copy-button):focus-visible {
+  ):not(.sidebar-scrim):not(.approval-copy-button):not(.address-copy-button):focus-visible {
   background: #374151;
 }
 
@@ -610,6 +610,57 @@ button:disabled {
 .approval-copy-button svg {
   width: 17px;
   height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.address-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.address-copy-button {
+  width: 20px;
+  height: 20px;
+  min-width: 0;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #64748b;
+}
+
+.address-copy-button:hover:not(:disabled),
+.address-copy-button:focus-visible,
+.address-copy-button:active {
+  background: #e5e7eb;
+  color: #111827;
+}
+
+.address-copy-button.copied {
+  color: #047857;
+}
+
+.address-copy-button.copied:hover:not(:disabled),
+.address-copy-button.copied:focus-visible {
+  color: #047857;
+}
+
+.address-copy-button:disabled {
+  opacity: 0.45;
+}
+
+.address-copy-button svg {
+  width: 14px;
+  height: 14px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.9;

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import CardSection from "../CardSection";
 import Modal from "../Modal";
 import DepositDialog from "../DepositDialog";
@@ -33,6 +34,19 @@ export default function RechargeView({
   waitForAutopayAuthorization,
 }) {
   const autopayEndpoint = account?.autopay_url || "";
+  const [addressCopied, setAddressCopied] = useState(false);
+
+  async function copyAddress() {
+    const addr = autopayWalletBalance?.address;
+    if (!addr) return;
+    try {
+      await navigator.clipboard.writeText(addr);
+      setAddressCopied(true);
+      window.setTimeout(() => setAddressCopied(false), 1400);
+    } catch {
+      setAddressCopied(false);
+    }
+  }
 
   return (
     <>
@@ -121,6 +135,44 @@ export default function RechargeView({
                   </span>
                 </>
               )}
+              <span className="balance-label">Address</span>
+              <div className="address-row">
+                <span className="balance-value mono">
+                  {autopayWalletBalance?.address
+                    ? shortAddress(autopayWalletBalance.address)
+                    : autopayWalletBalanceError
+                    ? "Unavailable"
+                    : "Loading..."}
+                </span>
+                {autopayWalletBalance?.address && (
+                  <button
+                    type="button"
+                    className={`address-copy-button${addressCopied ? " copied" : ""}`}
+                    aria-label={addressCopied ? "Copied" : "Copy address"}
+                    title={addressCopied ? "Copied" : "Copy address"}
+                    onClick={copyAddress}
+                  >
+                    {addressCopied ? (
+                      <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+                        <path d="M5 13l4 4L19 7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    ) : (
+                      <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+                        <rect x="9" y="9" width="10" height="10" rx="2" fill="none" stroke="currentColor" strokeWidth="2"/>
+                        <path d="M6 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1" fill="none" stroke="currentColor" strokeWidth="2"/>
+                      </svg>
+                    )}
+                  </button>
+                )}
+              </div>
+              <span className="balance-label">Balance</span>
+              <span className="balance-value">
+                {autopayWalletBalanceError
+                  ? "Unavailable"
+                  : autopayWalletBalance
+                  ? `${autopayWalletBalance.balance} ${autopayWalletBalance.symbol}`
+                  : "Loading..."}
+              </span>
             </div>
             {autopayWalletBalanceError && <p className="form-error">{autopayWalletBalanceError}</p>}
           </>
