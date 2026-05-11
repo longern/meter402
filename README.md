@@ -158,7 +158,7 @@ Do not enable development payments in production. The proof must be a local secr
 
 ### Authentication
 
-- `GET /api/session` — Returns the current session identity (owner address, autopay URL, expiry) or `null`.
+- `GET /api/session` — Returns the current session identity (owner address and expiry) or `null`.
 - `POST /api/login/challenge` — Creates a short-lived main-site wallet login challenge.
 - `POST /api/login/complete` — Verifies the wallet signature and sets the session cookie.
 - `POST /api/login/scan/start` — Creates a QR/deeplink login request backed by a Durable Object.
@@ -167,7 +167,7 @@ Do not enable development payments in production. The proof must be a local secr
 - `POST /api/login/scan/:id/approve` — Verifies the wallet-page signature and approves the scan login.
 - `POST /api/login/scan/:id/complete` — Completes the desktop browser login after approval.
 - `POST /api/logout` — Clears the session cookie.
-- `POST /api/session/autopay` — Updates the autopay endpoint stored in the session.
+- `POST /api/session/autopay` — Updates the account autopay endpoint stored in D1.
 
 ### Deposits
 

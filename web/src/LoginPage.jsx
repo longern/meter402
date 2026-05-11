@@ -165,7 +165,6 @@ export function LoginPage({ returnTo = "", onSessionChange = () => {} }) {
   function finishLogin(completed) {
     const nextIdentity = {
       owner: completed.owner,
-      autopay_url: completed.autopay_url,
       expires_at: completed.expires_at,
     };
     setIdentity(nextIdentity);
@@ -354,7 +353,6 @@ export function WalletLoginPage({ onSessionChange = () => {} }) {
       );
       const nextIdentity = {
         owner: completed.owner,
-        autopay_url: completed.autopay_url,
         expires_at: completed.expires_at,
       };
       setIdentity(nextIdentity);

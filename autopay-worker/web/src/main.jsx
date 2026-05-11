@@ -70,6 +70,20 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const provider = window.ethereum;
+    if (!provider?.on) return undefined;
+
+    const handleAccountsChanged = (accounts = []) => {
+      setWalletAddress(accounts[0]).catch(showError);
+    };
+
+    provider.on("accountsChanged", handleAccountsChanged);
+    return () => {
+      provider.removeListener?.("accountsChanged", handleAccountsChanged);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!authRequest) return;
     if (!ownerAddress) {
       setWalletStatus("Connect an owner wallet to continue.");
@@ -200,6 +214,15 @@ function App() {
     return await import("./walletAuth.js");
   }
 
+  async function setWalletAddress(address) {
+    if (!address) {
+      setOwnerAddress("");
+      return;
+    }
+    const { checksumAddress } = await loadWalletAuth();
+    setOwnerAddress(checksumAddress(address));
+  }
+
   async function autoConnectWallet() {
     if (!window.ethereum) return;
     try {
@@ -218,8 +241,7 @@ function App() {
     try {
       setActiveProvider(provider);
       const accounts = await provider.request({ method: "eth_requestAccounts" });
-      const { checksumAddress } = await loadWalletAuth();
-      setOwnerAddress(accounts[0] ? checksumAddress(accounts[0]) : "");
+      await setWalletAddress(accounts[0]);
     } finally {
       setBusy(false);
     }
@@ -291,15 +313,9 @@ function App() {
   const renderDashboard = () => {
     if (checkingSession) {
       return (
-        <>
-          <header>
-            <h1>Autopay Dashboard</h1>
-            <p>Manage your Meteria402 autopay authorizations and payments.</p>
-          </header>
-          <div className="content">
-            <div className="status">Checking session...</div>
-          </div>
-        </>
+        <div className="content dashboard-loading">
+          <div className="spinner" role="status" aria-label="Loading" />
+        </div>
       );
     }
 
@@ -307,7 +323,7 @@ function App() {
       const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
       return (
         <>
-          <header>
+          <header className="dashboard-guest-header">
             <h1>Autopay Dashboard</h1>
             <p>Sign in to view your authorizations and payments.</p>
           </header>
@@ -382,15 +398,12 @@ function App() {
                   <p className="login-subtitle">Connect your wallet to access your dashboard.</p>
                   <div className="wallet-row" style={{ marginTop: "20px" }}>
                     {ownerAddress ? (
-                      <>
-                        <strong>{shortAddress(ownerAddress)}</strong>
-                        <span className="badge">Not signed in</span>
-                      </>
+                      <strong>{shortAddress(ownerAddress)}</strong>
                     ) : (
                       <span style={{ color: "#6b7280" }}>Wallet connected, requesting accounts...</span>
                     )}
                   </div>
-                  <div style={{ marginTop: "16px" }}>
+                  <div className="login-action">
                     {ownerAddress && (
                       <button disabled={busy} onClick={() => handleLogin()}>
                         Sign In
@@ -405,22 +418,25 @@ function App() {
       );
     }
 
+    const adminModeButton = session.is_admin ? (
+      <div className="dashboard-content-actions">
+        <button
+          className="dashboard-mode-button"
+          type="button"
+          disabled={busy}
+          onClick={() => setPageMode((current) => current === "admin" ? "dashboard" : "admin")}
+        >
+          {pageMode === "admin" ? "Back to dashboard" : "Go to admin console"}
+        </button>
+      </div>
+    ) : null;
+
     return (
       <>
         <div className="dashboard-topbar">
           <div className="dashboard-topbar-inner">
             <h1>{pageMode === "admin" ? "Admin" : "Autopay"}</h1>
             <div className="dashboard-account">
-              {session.is_admin && (
-                <button
-                  className="dashboard-mode-button"
-                  type="button"
-                  disabled={busy}
-                  onClick={() => setPageMode((current) => current === "admin" ? "dashboard" : "admin")}
-                >
-                  {pageMode === "admin" ? "Dashboard" : "Admin"}
-                </button>
-              )}
               <span className="dashboard-address">{shortAddress(session.owner)}</span>
               <button className="icon-button" type="button" aria-label="Sign out" disabled={busy} onClick={() => handleLogout()}>
                 <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -435,84 +451,93 @@ function App() {
 
         {pageMode === "admin" ? (
           <div className="content admin-content">
+            {adminModeButton}
             <AdminDashboard onStatus={setWalletStatus} />
           </div>
         ) : (
         <div className="content">
+          {adminModeButton}
           <section className="dashboard-card autopay-wallet-card">
             <div className="section-heading">
               <h2>Autopay wallet</h2>
-              <span>Managed payer</span>
             </div>
-            <strong className="wallet-address-large">{autopayWalletAddress ? shortAddress(autopayWalletAddress) : "Not configured"}</strong>
-            {autopayWalletAddress && <p className="wallet-address-full">{autopayWalletAddress}</p>}
-            <form className="wallet-key-form" onSubmit={handleAutopayWalletSave}>
-              <label htmlFor="autopay-private-key">Private key</label>
-              <input
-                id="autopay-private-key"
-                type="password"
-                autoComplete="off"
-                spellCheck="false"
-                placeholder="0x..."
-                value={autopayPrivateKey}
-                onChange={(event) => setAutopayPrivateKey(event.target.value)}
-              />
-              <button type="submit" disabled={accountBusy || !autopayPrivateKey.trim()}>
-                {accountBusy ? "Saving..." : "Save"}
-              </button>
-            </form>
+            <hr className="dashboard-card-divider" />
+            <div className="dashboard-card-body">
+              <strong className="wallet-address-large">{autopayWalletAddress ? shortAddress(autopayWalletAddress) : "Not configured"}</strong>
+              {autopayWalletAddress && <p className="wallet-address-full">{autopayWalletAddress}</p>}
+              <form className="wallet-key-form" onSubmit={handleAutopayWalletSave}>
+                <label htmlFor="autopay-private-key">Private key</label>
+                <input
+                  id="autopay-private-key"
+                  type="password"
+                  autoComplete="off"
+                  spellCheck="false"
+                  placeholder="0x..."
+                  value={autopayPrivateKey}
+                  onChange={(event) => setAutopayPrivateKey(event.target.value)}
+                />
+                <button type="submit" disabled={accountBusy || !autopayPrivateKey.trim()}>
+                  {accountBusy ? "Saving..." : "Save"}
+                </button>
+              </form>
+            </div>
           </section>
 
           <section className="dashboard-card">
-            <div className="tabs">
-              <button className={activeTab === "authorizations" ? "active" : ""} onClick={() => setActiveTab("authorizations")}>Authorizations</button>
-              <button className={activeTab === "payments" ? "active" : ""} onClick={() => setActiveTab("payments")}>Payments</button>
+            <div className="section-heading">
+              <h2>Activity</h2>
+              <div className="tabs">
+                <button className={activeTab === "authorizations" ? "active" : ""} onClick={() => setActiveTab("authorizations")}>Authorizations</button>
+                <button className={activeTab === "payments" ? "active" : ""} onClick={() => setActiveTab("payments")}>Payments</button>
+              </div>
             </div>
+            <hr className="dashboard-card-divider" />
 
-            {auditBusy && <div className="status">Loading...</div>}
+            <div className="dashboard-card-body">
+              {auditBusy && <div className="status">Loading...</div>}
 
-            {activeTab === "authorizations" && (
-              <div className="audit-list">
-                {auditAuth.length === 0 && <div className="empty-cell">No authorizations yet.</div>}
-                {auditAuth.map((row) => (
-                  <article className="audit-item" key={row.id}>
-                    <div className="audit-main">
-                      <div>
-                        <span className="audit-label">Max amount</span>
-                        <strong className="audit-amount">{formatAuthorizationAmount(row)}</strong>
+              {activeTab === "authorizations" && (
+                <div className="audit-list">
+                  {auditAuth.length === 0 && <div className="empty-cell">No authorizations yet.</div>}
+                  {auditAuth.map((row) => (
+                    <article className="audit-item" key={row.id}>
+                      <div className="audit-main">
+                        <div>
+                          <span className="audit-label">Max amount</span>
+                          <strong className="audit-amount">{formatAuthorizationAmount(row)}</strong>
+                        </div>
+                        <span className={`status-badge ${statusClassName(row.status)}`}>{row.status}</span>
                       </div>
-                      <span className={`status-badge ${statusClassName(row.status)}`}>{row.status}</span>
-                    </div>
-                    <div className="audit-meta">
-                      <span>Origin {originHost(row.requester_origin) || "-"}</span>
-                      <span>Created {formatTimestamp(row.created_at)}</span>
-                      <span>Valid until {formatTimestamp(row.policy_valid_before)}</span>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            )}
-
-            {activeTab === "payments" && (
-              <div className="audit-list">
-                {auditPay.length === 0 && <div className="empty-cell">No payments yet.</div>}
-                {auditPay.map((row) => (
-                  <article className="audit-item" key={row.id}>
-                    <div className="audit-main">
-                      <div>
-                        <strong className="audit-amount">{formatPaymentAmount(row)}</strong>
+                      <div className="audit-meta">
+                        <span>Origin {originHost(row.requester_origin) || "-"}</span>
+                        <span>Created {formatTimestamp(row.created_at)}</span>
+                        <span>Valid until {formatTimestamp(row.policy_valid_before)}</span>
                       </div>
-                      <span className={`status-badge ${statusClassName(row.status)}`}>{row.status}</span>
-                    </div>
-                    <div className="audit-meta">
-                      <span>{originHost(row.requester_origin) || "-"}</span>
-                      <span>{formatTimestamp(row.created_at)}</span>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            )}
+                    </article>
+                  ))}
+                </div>
+              )}
 
+              {activeTab === "payments" && (
+                <div className="audit-list">
+                  {auditPay.length === 0 && <div className="empty-cell">No payments yet.</div>}
+                  {auditPay.map((row) => (
+                    <article className="audit-item" key={row.id}>
+                      <div className="audit-main">
+                        <div>
+                          <strong className="audit-amount">{formatPaymentAmount(row)}</strong>
+                        </div>
+                        <span className={`status-badge ${statusClassName(row.status)}`}>{row.status}</span>
+                      </div>
+                      <div className="audit-meta">
+                        <span>{originHost(row.requester_origin) || "-"}</span>
+                        <span>{formatTimestamp(row.created_at)}</span>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </div>
           </section>
         </div>
         )}

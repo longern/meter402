@@ -1,7 +1,6 @@
 import {
 requireAccountFromSession
 } from "./accounts";
-import { accountGateActiveCount } from "./account-gate";
 import {
 createApiKey,
 keyStatus,
@@ -27,15 +26,13 @@ import { reconcilePendingGatewayLogs } from "./v1-handlers";
 
 export async function handleGetAccount(request: Request, env: Env): Promise<Response> {
   const account = await requireAccountFromSession(request, env);
-  const activeRequestCount = await accountGateActiveCount(env, account.id);
 
   return jsonResponse({
     account_id: account.id,
-    current_api_key_id: account.api_key_id,
     status: account.status,
+    autopay_url: account.autopay_url || "",
     deposit_balance: formatMoney(account.deposit_balance),
     unpaid_invoice_total: formatMoney(account.unpaid_invoice_total),
-    active_request_count: activeRequestCount,
     concurrency_limit: account.concurrency_limit,
     min_deposit_required: formatMoney(account.min_deposit_required),
     autopay_min_recharge_amount: formatMoney(account.autopay_min_recharge_amount),
@@ -134,7 +131,6 @@ export async function handleListApiKeys(
   }
 
   return jsonResponse({
-    current_api_key_id: account.api_key_id,
     api_keys: keyList.map((row) => {
       const stats = statsMap.get(row.id) || {
         calls: 0,

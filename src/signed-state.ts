@@ -109,9 +109,6 @@ function normalizeSessionState(value: unknown): SessionState {
   }
   return {
     owner: state.owner,
-    autopay_url: typeof state.autopay_url === "string" && state.autopay_url.trim()
-      ? normalizeAutopayUrl(state.autopay_url)
-      : "",
     expires_at: expiresAt,
   };
 }

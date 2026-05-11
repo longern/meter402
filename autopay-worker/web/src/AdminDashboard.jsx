@@ -49,58 +49,62 @@ export default function AdminDashboard({ onStatus = () => {} }) {
       <section className="dashboard-card admin-create-card">
         <div className="section-heading">
           <h2>Add user</h2>
-          <span>Wallet mapping</span>
         </div>
-        <form className="admin-account-form" onSubmit={handleAccountSave}>
-          <label htmlFor="admin-owner-address">Main wallet address</label>
-          <input
-            id="admin-owner-address"
-            autoComplete="off"
-            spellCheck="false"
-            placeholder="0x..."
-            value={ownerAddress}
-            onChange={(event) => setOwnerAddress(event.target.value)}
-          />
-          <label htmlFor="admin-autopay-private-key">Autopay private key</label>
-          <input
-            id="admin-autopay-private-key"
-            type="password"
-            autoComplete="off"
-            spellCheck="false"
-            placeholder="0x..."
-            value={autopayPrivateKey}
-            onChange={(event) => setAutopayPrivateKey(event.target.value)}
-          />
-          <button type="submit" disabled={busy || !ownerAddress.trim() || !autopayPrivateKey.trim()}>
-            {busy ? "Saving..." : "Add user"}
-          </button>
-        </form>
+        <hr className="dashboard-card-divider" />
+        <div className="dashboard-card-body">
+          <form className="admin-account-form" onSubmit={handleAccountSave}>
+            <label htmlFor="admin-owner-address">Main wallet address</label>
+            <input
+              id="admin-owner-address"
+              autoComplete="off"
+              spellCheck="false"
+              placeholder="0x..."
+              value={ownerAddress}
+              onChange={(event) => setOwnerAddress(event.target.value)}
+            />
+            <label htmlFor="admin-autopay-private-key">Autopay private key</label>
+            <input
+              id="admin-autopay-private-key"
+              type="password"
+              autoComplete="off"
+              spellCheck="false"
+              placeholder="0x..."
+              value={autopayPrivateKey}
+              onChange={(event) => setAutopayPrivateKey(event.target.value)}
+            />
+            <button type="submit" disabled={busy || !ownerAddress.trim() || !autopayPrivateKey.trim()}>
+              {busy ? "Saving..." : "Add user"}
+            </button>
+          </form>
+        </div>
       </section>
 
       <section className="dashboard-card admin-users-card">
         <div className="section-heading">
           <h2>Users</h2>
-          <span>{accounts.length} total</span>
         </div>
-        {busy && <div className="status">Loading...</div>}
-        <div className="audit-list admin-account-list">
-          {accounts.length === 0 && <div className="empty-cell">No users yet.</div>}
-          {accounts.map((row) => (
-            <article className="audit-item" key={row.owner}>
-              <div className="audit-main">
-                <div>
-                  <span className="audit-label">Owner</span>
-                  <strong className="audit-amount">{shortAddress(row.owner)}</strong>
+        <hr className="dashboard-card-divider" />
+        <div className="dashboard-card-body">
+          {busy && <div className="status">Loading...</div>}
+          <div className="audit-list admin-account-list">
+            {accounts.length === 0 && <div className="empty-cell">No users yet.</div>}
+            {accounts.map((row) => (
+              <article className="audit-item" key={row.owner}>
+                <div className="audit-main">
+                  <div>
+                    <span className="audit-label">Owner</span>
+                    <strong className="audit-amount">{shortAddress(row.owner)}</strong>
+                  </div>
+                  <span className="status-badge approved">Configured</span>
                 </div>
-                <span className="status-badge approved">Configured</span>
-              </div>
-              <div className="audit-meta">
-                <span title={row.owner}>Main {shortAddress(row.owner)}</span>
-                <span title={row.autopay_wallet_address}>Autopay {shortAddress(row.autopay_wallet_address)}</span>
-                <span>Updated {formatTimestamp(row.updated_at)}</span>
-              </div>
-            </article>
-          ))}
+                <div className="audit-meta">
+                  <span title={row.owner}>Main {shortAddress(row.owner)}</span>
+                  <span title={row.autopay_wallet_address}>Autopay {shortAddress(row.autopay_wallet_address)}</span>
+                  <span>Updated {formatTimestamp(row.updated_at)}</span>
+                </div>
+              </article>
+            ))}
+          </div>
         </div>
       </section>
     </div>

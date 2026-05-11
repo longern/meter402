@@ -20,7 +20,6 @@ import {
 requireSession,
 serializeExpiredSessionCookie,
 serializeSessionCookie,
-sessionExpiresAt
 } from "./session";
 import {
 signSessionState,
@@ -82,11 +81,21 @@ export async function handleAutopayWalletBalance(
 
 export async function handleGetSession(request: Request, env: Env): Promise<Response> {
   const session = await requireSession(request, env);
-  return jsonResponse({
+  const sessionToken = await signSessionState(env, {
     owner: session.owner,
-    autopay_url: session.autopay_url,
-    expires_at: new Date(session.expires_at).toISOString(),
+    expires_at: session.expires_at,
   });
+  return jsonResponse(
+    {
+      owner: session.owner,
+      expires_at: new Date(session.expires_at).toISOString(),
+    },
+    {
+      headers: {
+        "set-cookie": serializeSessionCookie(request, sessionToken, session.expires_at),
+      },
+    },
+  );
 }
 
 export function handleLogout(request: Request): Response {
@@ -120,32 +129,24 @@ export async function handleUpdateSessionAutopay(
 
   const account = await getAccountByOwner(env, session.owner);
   const now = new Date().toISOString();
-  const expiresAt = sessionExpiresAt();
 
-  if (account) {
-    await env.DB.prepare(
-      `UPDATE meteria402_accounts SET autopay_url = ?, updated_at = ? WHERE id = ?`,
-    )
-      .bind(newAutopayUrl, now, account.id)
-      .run();
+  if (!account) {
+    return errorResponse(
+      404,
+      "account_not_found",
+      "No account found for this session.",
+    );
   }
 
-  const sessionToken = await signSessionState(env, {
+  await env.DB.prepare(
+    `UPDATE meteria402_accounts SET autopay_url = ?, updated_at = ? WHERE id = ?`,
+  )
+    .bind(newAutopayUrl, now, account.id)
+    .run();
+
+  return jsonResponse({
     owner: session.owner,
     autopay_url: newAutopayUrl,
-    expires_at: expiresAt,
+    updated_at: now,
   });
-
-  return jsonResponse(
-    {
-      owner: session.owner,
-      autopay_url: newAutopayUrl,
-      expires_at: new Date(expiresAt).toISOString(),
-    },
-    {
-      headers: {
-        "set-cookie": serializeSessionCookie(request, sessionToken, expiresAt),
-      },
-    },
-  );
 }

@@ -614,10 +614,6 @@ dd {
     margin-top: 8px;
   }
 
-  button {
-    width: 100%;
-  }
-
   .actions {
     gap: 8px;
   }
@@ -732,6 +728,20 @@ dd {
   padding: 0;
 }
 
+.dashboard-loading {
+  display: grid;
+  place-items: center;
+  min-height: 100dvh;
+  padding: 0;
+}
+
+.dashboard-guest-header {
+  width: 100%;
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 20px 18px 14px;
+}
+
 .dashboard-topbar {
   flex: 0 0 60px;
   height: 60px;
@@ -810,11 +820,29 @@ dd {
   stroke-linejoin: round;
 }
 
+.dashboard-content-actions {
+  margin-bottom: 12px;
+  text-align: left;
+}
+
 .dashboard-mode-button {
-  min-height: 36px;
-  padding: 0 14px;
-  border-radius: 8px;
+  display: inline;
+  width: auto;
+  min-height: 0;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #111827;
   font-size: 13px;
+  line-height: 1.35;
+  font-weight: 750;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.dashboard-mode-button:hover {
+  color: #2563eb;
 }
 
 .dashboard-page .content {
@@ -830,6 +858,10 @@ dd {
 
 .dashboard-card {
   margin-top: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: #fff;
 }
 
 .dashboard-card + .dashboard-card {
@@ -838,22 +870,29 @@ dd {
 
 .section-heading {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 14px;
+  min-height: 48px;
+  margin-bottom: 0;
+  padding: 0 16px;
 }
 
 .section-heading h2 {
   margin: 0;
+  font-size: 16px;
 }
 
-.section-heading span {
-  color: #6b7280;
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
+.dashboard-card-divider {
+  height: 1px;
+  margin-block-start: 0;
+  margin-block-end: 0;
+  border: 0;
+  background: #e5e7eb;
+}
+
+.dashboard-card-body {
+  padding: 16px;
 }
 
 .wallet-address-large {
@@ -949,7 +988,7 @@ dd {
 .tabs {
   display: flex;
   gap: 6px;
-  margin-bottom: 16px;
+  margin: 0;
   padding: 4px;
   border-radius: 8px;
   background: #f3f4f6;
@@ -957,11 +996,11 @@ dd {
 
 .tabs button {
   flex: 1 1 0;
-  padding: 10px 14px;
+  padding: 7px 12px;
   border-radius: 6px;
   background: transparent;
   color: #4b5563;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -1067,6 +1106,12 @@ dd {
     grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
     align-content: start;
     gap: 18px;
+  }
+
+  .dashboard-content-actions {
+    grid-column: 1 / -1;
+    justify-self: start;
+    margin-bottom: 0;
   }
 
   .dashboard-page .content.admin-content {
@@ -1340,6 +1385,15 @@ dd {
   font-size: 14px;
   margin: 0 0 24px;
   line-height: 1.5;
+}
+
+.login-action {
+  width: min(100%, 360px);
+  margin-top: 16px;
+}
+
+.login-action button {
+  width: 100%;
 }
 
 /* Divider with text */

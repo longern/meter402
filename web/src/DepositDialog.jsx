@@ -58,6 +58,7 @@ export default function DepositDialog({
   isBusy,
   show,
   identity,
+  autopayUrl,
   setNewApiKey,
   waitForAutopayAuthorization,
   loadAccount,
@@ -111,7 +112,10 @@ export default function DepositDialog({
     await withBusy("directPayment", async () => {
       const quote = await request("/api/deposits/quote", {
         method: "POST",
-        body: JSON.stringify({ amount: amount.trim() }),
+        body: JSON.stringify({
+          amount: amount.trim(),
+          autopay_url: autopayUrl?.trim() || undefined,
+        }),
       });
       const pid = quote.payment_id;
       const qToken = quote.quote_token;
@@ -236,7 +240,10 @@ export default function DepositDialog({
       try {
         const quote = await request("/api/deposits/quote", {
           method: "POST",
-          body: JSON.stringify({ amount: amount.trim() }),
+          body: JSON.stringify({
+            amount: amount.trim(),
+            autopay_url: autopayUrl?.trim() || undefined,
+          }),
         });
         setPaymentCurrency(
           paymentCurrencyFromAccept(quote.payment_requirement?.accepts?.[0]),

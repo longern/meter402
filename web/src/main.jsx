@@ -149,7 +149,7 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
   const [identity, setIdentity] = useState(initialIdentity);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeView, setActiveView] = useState(() => getConsoleView(window.location.pathname));
-  const [autopayUrl, setAutopayUrl] = useState(initialIdentity?.autopay_url || DEFAULT_AUTOPAY_URL);
+  const [autopayUrl, setAutopayUrl] = useState(DEFAULT_AUTOPAY_URL);
   const [newApiKey, setNewApiKey] = useState("");
   const [newKeyName, setNewKeyName] = useState("");
   const [newKeyExpiresAt, setNewKeyExpiresAt] = useState("");
@@ -195,8 +195,7 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
 
   useEffect(() => {
     setIdentity(initialIdentity);
-    if (initialIdentity?.autopay_url) setAutopayUrl(initialIdentity.autopay_url);
-  }, [initialIdentity?.owner, initialIdentity?.autopay_url]);
+  }, [initialIdentity?.owner]);
 
   useEffect(() => {
     if (identity?.owner) {
@@ -205,11 +204,15 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
   }, [identity?.owner]);
 
   useEffect(() => {
-    if (activeView === "recharge" && identity?.owner && account) {
+    if (activeView !== "recharge" || !identity?.owner || !account) return;
+    loadDeposits();
+    if (account.autopay_url) {
       loadAutopayWalletBalance();
-      loadDeposits();
+    } else {
+      setAutopayWalletBalance(null);
+      setAutopayWalletBalanceError("");
     }
-  }, [activeView, identity?.owner, account?.account_id]);
+  }, [activeView, identity?.owner, account?.account_id, account?.autopay_url]);
 
   useEffect(() => {
     if (activeView === "autopay" && identity?.owner && account) {
@@ -260,7 +263,7 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
   }
 
   async function loadAutopayWalletBalance() {
-    if (!identity?.owner) return;
+    if (!identity?.owner || !account?.autopay_url) return;
     setBusy("loadWalletBalance");
     setAutopayWalletBalanceError("");
     try {
@@ -280,7 +283,9 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
         method: "POST",
         body: JSON.stringify({ autopay_url: autopayUrl.trim() }),
       });
-      setIdentity((current) => current ? { ...current, autopay_url: json.autopay_url } : current);
+      setAccount((current) => current ? { ...current, autopay_url: json.autopay_url } : current);
+      setAutopayWalletBalance(null);
+      setAutopayWalletBalanceError("");
       setEditEndpointOpen(false);
       show({ message: "Autopay endpoint updated.", autopay_url: json.autopay_url });
     });
@@ -312,7 +317,7 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
           total_budget: capTotalBudget.trim(),
           max_single_amount: capMaxSingleAmount.trim(),
           ttl_days: capTtlDays,
-          autopay_url: identity?.autopay_url || undefined,
+          autopay_url: account?.autopay_url || undefined,
         }),
         signal,
       });
@@ -401,6 +406,7 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
     try {
       const json = await request("/api/account");
       setAccount(json);
+      setAutopayUrl(json.autopay_url || DEFAULT_AUTOPAY_URL);
       setAccountMissing(false);
       show(json);
     } catch (error) {
@@ -447,7 +453,7 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
   }
 
   function openEditEndpointDialog() {
-    setAutopayUrl(identity?.autopay_url || "");
+    setAutopayUrl(account?.autopay_url || DEFAULT_AUTOPAY_URL);
     setEditEndpointOpen(true);
   }
 
@@ -806,6 +812,7 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
             request={request}
             withBusy={withBusy}
             show={show}
+            autopayUrl={autopayUrl}
             setNewApiKey={setNewApiKey}
             loadAccount={loadAccount}
             waitForAutopayAuthorization={waitForAutopayAuthorization}
@@ -914,6 +921,7 @@ function ActivationView({
   request,
   withBusy,
   show,
+  autopayUrl,
   setNewApiKey,
   loadAccount,
   waitForAutopayAuthorization,
@@ -948,6 +956,7 @@ function ActivationView({
           isBusy={isBusy}
           show={show}
           identity={identity}
+          autopayUrl={autopayUrl}
           setNewApiKey={setNewApiKey}
           waitForAutopayAuthorization={waitForAutopayAuthorization}
           loadAccount={loadAccount}

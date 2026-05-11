@@ -40,6 +40,13 @@ export async function handleDepositQuote(
 ): Promise<Response> {
   const session = await requireSession(request, env);
   const body = await readJsonObject(request);
+  const account = await getAccountByOwner(env, session.owner);
+  const requestedAutopayUrl =
+    typeof (body.autopay_url ?? body.autopayUrl) === "string" &&
+    String(body.autopay_url ?? body.autopayUrl).trim()
+      ? normalizeAutopayUrl(body.autopay_url ?? body.autopayUrl)
+      : "";
+  const autopayUrl = account?.autopay_url || requestedAutopayUrl;
   const amount = parseMoney(
     String(body.amount ?? env.DEFAULT_MIN_DEPOSIT ?? "5.00"),
   );
@@ -80,7 +87,7 @@ export async function handleDepositQuote(
     amount,
     currency: paymentCurrency,
     owner_address: session.owner,
-    autopay_url: session.autopay_url,
+    autopay_url: autopayUrl,
     payment_requirement: requirement,
     authorization: authMeta,
     expires_at: expiresAt,
@@ -90,7 +97,7 @@ export async function handleDepositQuote(
     payment_id: paymentId,
     amount,
     owner_address: session.owner,
-    autopay_url: session.autopay_url,
+    autopay_url: autopayUrl,
     token_amount: accept.amount,
     currency: paymentCurrency,
     network: accept.network,

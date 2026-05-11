@@ -17,6 +17,11 @@ type PayerWallet = {
   privateKey: Hex;
 };
 
+type ResolvedPayerWallet = PayerWallet & {
+  address: Address;
+  source: "account" | "admin_private_key";
+};
+
 type AccountWallet = {
   owner: Address;
   autopayWalletAddress: Address;
@@ -1374,17 +1379,31 @@ function requirePrivateKey(env: Env): Hex {
   return key as Hex;
 }
 
-async function getPayerWalletForOwner(env: Env, owner: Address): Promise<PayerWallet> {
+async function resolvePayerWalletForOwner(env: Env, owner: Address): Promise<ResolvedPayerWallet | null> {
   const accountWallet = await getAccountWallet(env, owner);
   if (accountWallet) {
+    const privateKey = await decryptPrivateKey(env, accountWallet.encryptedPrivateKey);
     return {
-      privateKey: await decryptPrivateKey(env, accountWallet.encryptedPrivateKey),
+      privateKey,
+      address: privateKeyToAccount(privateKey).address,
+      source: "account",
     };
   }
 
   if (isAdminOwner(env, owner)) {
-    return { privateKey: requirePrivateKey(env) };
+    const privateKey = requirePrivateKey(env);
+    return {
+      privateKey,
+      address: privateKeyToAccount(privateKey).address,
+      source: "admin_private_key",
+    };
   }
+  return null;
+}
+
+async function getPayerWalletForOwner(env: Env, owner: Address): Promise<PayerWallet> {
+  const resolved = await resolvePayerWalletForOwner(env, owner);
+  if (resolved) return resolved;
   throw new HttpError(403, "payer_wallet_not_found", "No payer wallet is configured for this owner.");
 }
 
@@ -1854,11 +1873,12 @@ async function handleAuthMe(request: Request, env: Env): Promise<Response> {
 
 async function handleAccountGet(request: Request, env: Env): Promise<Response> {
   const owner = getAddress(await requireSession(request, env));
-  const account = await getAccountWallet(env, owner);
+  const payerWallet = await resolvePayerWalletForOwner(env, owner);
   return jsonResponse({
     owner,
-    autopay_wallet_address: account?.autopayWalletAddress ?? null,
-    autopay_wallet_configured: Boolean(account),
+    autopay_wallet_address: payerWallet?.address ?? null,
+    autopay_wallet_configured: Boolean(payerWallet),
+    autopay_wallet_source: payerWallet?.source ?? null,
   });
 }
 

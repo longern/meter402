@@ -32,6 +32,8 @@ export default function RechargeView({
   setNewApiKey,
   waitForAutopayAuthorization,
 }) {
+  const autopayEndpoint = account?.autopay_url || "";
+
   return (
     <>
       <CardSection title="Account Balance">
@@ -57,7 +59,7 @@ export default function RechargeView({
       <CardSection
         title="Autopay Wallet"
         actions={
-          identity?.owner ? (
+          identity?.owner && autopayEndpoint ? (
             <button
               className="icon-button plain"
               type="button"
@@ -75,15 +77,18 @@ export default function RechargeView({
             <div className="balance-panel">
               <span className="balance-label">Endpoint</span>
               <div className="endpoint-row">
-                <span className="balance-value mono">{identity?.autopay_url || "—"}</span>
+                <span className={`balance-value mono${autopayEndpoint ? "" : " muted"}`}>
+                  {autopayEndpoint || "Not configured"}
+                </span>
                 <div className="endpoint-actions">
                   <a
-                    href={identity?.autopay_url}
+                    href={autopayEndpoint || undefined}
                     target="_blank"
                     rel="noreferrer"
                     className="icon-button open-link"
                     aria-label="Open endpoint"
-                    onClick={(e) => { if (!identity?.autopay_url) e.preventDefault(); }}
+                    aria-disabled={!autopayEndpoint}
+                    onClick={(e) => { if (!autopayEndpoint) e.preventDefault(); }}
                   >
                     <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
                       <path d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
@@ -104,22 +109,18 @@ export default function RechargeView({
                   </button>
                 </div>
               </div>
-              <span className="balance-label">Address</span>
-              <span className="balance-value mono">
-                {autopayWalletBalance?.address
-                  ? shortAddress(autopayWalletBalance.address)
-                  : autopayWalletBalanceError
-                  ? "Unavailable"
-                  : "Loading..."}
-              </span>
-              <span className="balance-label">Balance</span>
-              <span className="balance-value">
-                {autopayWalletBalanceError
-                  ? "Unavailable"
-                  : autopayWalletBalance
-                  ? `${autopayWalletBalance.balance} ${autopayWalletBalance.symbol}`
-                  : "Loading..."}
-              </span>
+              {autopayWalletBalance && (
+                <>
+                  <span className="balance-label">Address</span>
+                  <span className="balance-value mono">
+                    {shortAddress(autopayWalletBalance.address)}
+                  </span>
+                  <span className="balance-label">Balance</span>
+                  <span className="balance-value">
+                    {autopayWalletBalance.balance} {autopayWalletBalance.symbol}
+                  </span>
+                </>
+              )}
             </div>
             {autopayWalletBalanceError && <p className="form-error">{autopayWalletBalanceError}</p>}
           </>
@@ -213,6 +214,7 @@ export default function RechargeView({
           isBusy={isBusy}
           show={show}
           identity={identity}
+          autopayUrl={account?.autopay_url || autopayUrl}
           setNewApiKey={setNewApiKey}
           waitForAutopayAuthorization={waitForAutopayAuthorization}
           loadAccount={loadAccount}

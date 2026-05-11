@@ -332,18 +332,15 @@ async function createApprovedLoginResponse(
   owner: string,
 ): Promise<Response> {
   const normalizedOwner = getAddress(owner);
-  const autopayUrl = await readAccountAutopayUrl(env, normalizedOwner);
   const expiresAt = sessionExpiresAt();
   const sessionToken = await signSessionState(env, {
     owner: normalizedOwner,
-    autopay_url: autopayUrl,
     expires_at: expiresAt,
   });
   return jsonResponse(
     {
       status: "approved",
       owner: normalizedOwner,
-      autopay_url: autopayUrl,
       expires_at: new Date(expiresAt).toISOString(),
     },
     {
@@ -352,20 +349,6 @@ async function createApprovedLoginResponse(
       },
     },
   );
-}
-
-async function readAccountAutopayUrl(env: Env, owner: string): Promise<string> {
-  try {
-    const row = await env.DB.prepare(
-      `SELECT autopay_url FROM meteria402_accounts WHERE lower(owner_address) = lower(?) LIMIT 1`,
-    )
-      .bind(owner)
-      .first<{ autopay_url: string | null }>();
-    return row?.autopay_url || "";
-  } catch (error) {
-    console.warn("Login account autopay lookup skipped", error);
-    return "";
-  }
 }
 
 function buildLoginMessage(state: LoginChallengeState): string {

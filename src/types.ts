@@ -108,7 +108,6 @@ export type LoginChallengeState = {
 
 export type SessionState = {
   owner: string;
-  autopay_url: string;
   expires_at: number;
 };
 
