@@ -36,7 +36,9 @@ export type RouteHandlers = {
   handleCompleteOwnerRebind: Handler;
   handleListApiKeys: Handler;
   handleCreateApiKey: Handler;
-  handleRevokeApiKey: IdHandler;
+  handleDisableApiKey: IdHandler;
+  handleEnableApiKey: IdHandler;
+  handleDeleteApiKey: IdHandler;
   handleListInvoices: Handler;
   handleListRequests: Handler;
   handleReconcileRequests: Handler;
@@ -206,7 +208,15 @@ async function dispatchBillingRoute(
   }
   const apiKeyId = matchPath(url.pathname, /^\/api\/api-keys\/([^/]+)$/)?.[0];
   if (method === "DELETE" && apiKeyId) {
-    return handlers.handleRevokeApiKey(request, env, apiKeyId);
+    return handlers.handleDeleteApiKey(request, env, apiKeyId);
+  }
+  const apiKeyAction = matchPath(url.pathname, /^\/api\/api-keys\/([^/]+)\/(disable|enable)$/);
+  if (method === "POST" && apiKeyAction) {
+    const [id, action] = apiKeyAction;
+    if (action === "disable") {
+      return handlers.handleDisableApiKey(request, env, id);
+    }
+    return handlers.handleEnableApiKey(request, env, id);
   }
 
   if (method === "GET" && url.pathname === "/api/invoices") {

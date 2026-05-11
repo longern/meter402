@@ -14,7 +14,6 @@ import { normalizeApiError } from "./apiError";
 import {
   readableError,
   shortAddress,
-  formatCompactNumber,
   formatMoneyCompact,
   apiKeyDurationToIso,
   getConsoleView,
@@ -506,9 +505,29 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
     }
   }
 
-  async function revokeApiKey(keyId) {
-    if (!window.confirm("Revoke this API key? Clients using it will stop working.")) return;
-    await withBusy("revokeApiKey", async () => {
+  async function disableApiKey(keyId) {
+    await withBusy("disableApiKey", async () => {
+      const json = await request(`/api/api-keys/${encodeURIComponent(keyId)}/disable`, {
+        method: "POST",
+      });
+      show(json);
+      await loadApiKeys();
+    });
+  }
+
+  async function enableApiKey(keyId) {
+    await withBusy("enableApiKey", async () => {
+      const json = await request(`/api/api-keys/${encodeURIComponent(keyId)}/enable`, {
+        method: "POST",
+      });
+      show(json);
+      await loadApiKeys();
+    });
+  }
+
+  async function deleteApiKey(keyId) {
+    if (!window.confirm("Delete this API key? It will be hidden and clients using it will stop working.")) return;
+    await withBusy("deleteApiKey", async () => {
       const json = await request(`/api/api-keys/${encodeURIComponent(keyId)}`, {
         method: "DELETE",
       });
@@ -861,7 +880,9 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
             busy={busy}
             loadApiKeys={loadApiKeys}
             openCreateKeyDialog={openCreateKeyDialog}
-            revokeApiKey={revokeApiKey}
+            disableApiKey={disableApiKey}
+            enableApiKey={enableApiKey}
+            deleteApiKey={deleteApiKey}
             navigateConsoleView={navigateConsoleView}
             createKeyOpen={createKeyOpen}
             closeCreateKeyDialog={closeCreateKeyDialog}
@@ -874,7 +895,6 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
             setNewKeySpendLimit={setNewKeySpendLimit}
             newApiKey={newApiKey}
             keyDialogError={keyDialogError}
-            formatCompactNumber={formatCompactNumber}
             formatMoneyCompact={formatMoneyCompact}
           />
         )}

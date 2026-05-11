@@ -44,6 +44,8 @@ export function formatCompactNumber(value) {
 
 export function formatMoneyCompact(microUsd) {
   const usd = Number(microUsd) / 1_000_000;
+  if (!Number.isFinite(usd)) return "--";
+  if (usd === 0) return "$0";
   if (usd >= 1) return `$${usd.toFixed(2)}`;
   if (usd >= 0.01) return `$${usd.toFixed(3)}`;
   return `$${usd.toFixed(6)}`;

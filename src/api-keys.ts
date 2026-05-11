@@ -60,7 +60,7 @@ export function keyStatus(
   spendLimit: number | null = null,
   spentAmount = 0,
 ): string {
-  if (revokedAt) return "revoked";
+  if (revokedAt) return "disabled";
   if (expiresAt && Date.parse(expiresAt) <= Date.now()) return "expired";
   if (spendLimit != null && spentAmount >= spendLimit) return "exhausted";
   return "active";

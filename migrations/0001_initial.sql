@@ -13,6 +13,9 @@ CREATE TABLE IF NOT EXISTS meteria402_accounts (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE INDEX IF NOT EXISTS idx_meteria402_accounts_owner_lower
+  ON meteria402_accounts(lower(owner_address));
+
 CREATE TABLE IF NOT EXISTS meteria402_api_keys (
   id TEXT PRIMARY KEY,
   account_id TEXT NOT NULL REFERENCES meteria402_accounts(id) ON DELETE CASCADE,
@@ -21,12 +24,15 @@ CREATE TABLE IF NOT EXISTS meteria402_api_keys (
   key_suffix TEXT NOT NULL,
   name TEXT,
   expires_at TEXT,
+  spend_limit INTEGER,
+  spent_amount INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  revoked_at TEXT
+  revoked_at TEXT,
+  deleted_at TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_meteria402_api_keys_account_id ON meteria402_api_keys(account_id);
-CREATE INDEX IF NOT EXISTS idx_meteria402_api_keys_expires_at ON meteria402_api_keys(expires_at);
+CREATE INDEX IF NOT EXISTS idx_meteria402_api_keys_account_deleted_created
+  ON meteria402_api_keys(account_id, deleted_at, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS meteria402_requests (
   id TEXT PRIMARY KEY,
@@ -46,9 +52,13 @@ CREATE TABLE IF NOT EXISTS meteria402_requests (
   completed_at TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_meteria402_requests_account_id ON meteria402_requests(account_id);
 CREATE INDEX IF NOT EXISTS idx_meteria402_requests_api_key_id ON meteria402_requests(api_key_id);
-CREATE INDEX IF NOT EXISTS idx_meteria402_requests_status ON meteria402_requests(status);
+CREATE INDEX IF NOT EXISTS idx_meteria402_requests_account_started
+  ON meteria402_requests(account_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_meteria402_requests_account_status_completed
+  ON meteria402_requests(account_id, status, completed_at ASC);
+CREATE INDEX IF NOT EXISTS idx_meteria402_requests_status_completed
+  ON meteria402_requests(status, completed_at ASC);
 
 CREATE TABLE IF NOT EXISTS meteria402_invoices (
   id TEXT PRIMARY KEY,
@@ -63,8 +73,10 @@ CREATE TABLE IF NOT EXISTS meteria402_invoices (
   voided_at TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_meteria402_invoices_account_id ON meteria402_invoices(account_id);
-CREATE INDEX IF NOT EXISTS idx_meteria402_invoices_status ON meteria402_invoices(status);
+CREATE INDEX IF NOT EXISTS idx_meteria402_invoices_account_created
+  ON meteria402_invoices(account_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_meteria402_invoices_request_id
+  ON meteria402_invoices(request_id);
 
 CREATE TABLE IF NOT EXISTS meteria402_payments (
   id TEXT PRIMARY KEY,
@@ -82,11 +94,12 @@ CREATE TABLE IF NOT EXISTS meteria402_payments (
   settled_at TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_meteria402_payments_account_id ON meteria402_payments(account_id);
 CREATE INDEX IF NOT EXISTS idx_meteria402_payments_invoice_id ON meteria402_payments(invoice_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_meteria402_payments_payload_hash
   ON meteria402_payments(x402_payload_hash)
   WHERE x402_payload_hash IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_meteria402_payments_account_kind_settled
+  ON meteria402_payments(account_id, kind, settled_at DESC);
 
 CREATE TABLE IF NOT EXISTS meteria402_autopay_requests (
   id TEXT PRIMARY KEY,
@@ -103,9 +116,8 @@ CREATE TABLE IF NOT EXISTS meteria402_autopay_requests (
   settled_at TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_meteria402_autopay_requests_payment_id ON meteria402_autopay_requests(payment_id);
-CREATE INDEX IF NOT EXISTS idx_meteria402_autopay_requests_account_id ON meteria402_autopay_requests(account_id);
-CREATE INDEX IF NOT EXISTS idx_meteria402_autopay_requests_status ON meteria402_autopay_requests(status);
+CREATE INDEX IF NOT EXISTS idx_meteria402_autopay_requests_payment_created
+  ON meteria402_autopay_requests(payment_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS meteria402_autopay_capabilities (
   id TEXT PRIMARY KEY,
@@ -123,9 +135,11 @@ CREATE TABLE IF NOT EXISTS meteria402_autopay_capabilities (
   revoked_at TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_meteria402_autopay_capabilities_account_id ON meteria402_autopay_capabilities(account_id);
-CREATE INDEX IF NOT EXISTS idx_meteria402_autopay_capabilities_valid_before ON meteria402_autopay_capabilities(valid_before);
-CREATE INDEX IF NOT EXISTS idx_meteria402_autopay_capabilities_revoked_at ON meteria402_autopay_capabilities(revoked_at);
+CREATE INDEX IF NOT EXISTS idx_meteria402_autopay_capabilities_account_created
+  ON meteria402_autopay_capabilities(account_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_meteria402_autopay_capabilities_active_account_created
+  ON meteria402_autopay_capabilities(account_id, created_at DESC)
+  WHERE revoked_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS meteria402_ledger_entries (
   id TEXT PRIMARY KEY,
@@ -140,4 +154,3 @@ CREATE TABLE IF NOT EXISTS meteria402_ledger_entries (
 );
 
 CREATE INDEX IF NOT EXISTS idx_meteria402_ledger_entries_account_id ON meteria402_ledger_entries(account_id);
-CREATE INDEX IF NOT EXISTS idx_meteria402_ledger_entries_type ON meteria402_ledger_entries(type);

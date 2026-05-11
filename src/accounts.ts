@@ -28,6 +28,7 @@ export async function authenticate(
      JOIN meteria402_accounts a ON a.id = k.account_id
      WHERE k.key_hash = ?
        AND k.revoked_at IS NULL
+       AND k.deleted_at IS NULL
        AND (k.expires_at IS NULL OR k.expires_at > ?)`,
   )
     .bind(keyHash, new Date().toISOString())

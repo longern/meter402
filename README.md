@@ -180,7 +180,9 @@ Do not enable development payments in production. The proof must be a local secr
 - `GET /api/account` — Get deposit balance, unpaid invoice total, and status.
 - `GET /api/api-keys` — List API keys.
 - `POST /api/api-keys` — Create a new API key.
-- `DELETE /api/api-keys/:id` — Revoke an API key.
+- `POST /api/api-keys/:id/disable` — Disable an API key.
+- `POST /api/api-keys/:id/enable` — Re-enable a disabled API key.
+- `DELETE /api/api-keys/:id` — Soft-delete an API key.
 - `GET /api/invoices` — List invoices.
 - `GET /api/requests` — List model calls / usage records.
 

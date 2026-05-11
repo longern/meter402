@@ -272,7 +272,7 @@ export async function handleListApiKeys(
   const rows = await env.DB.prepare(
     `SELECT id, key_prefix, key_suffix, name, expires_at, spend_limit, spent_amount, created_at, revoked_at
      FROM meteria402_api_keys
-     WHERE account_id = ?
+     WHERE account_id = ? AND deleted_at IS NULL
      ORDER BY created_at DESC`,
   )
     .bind(account.id)
@@ -288,67 +288,20 @@ export async function handleListApiKeys(
       revoked_at: string | null;
     }>();
 
-  const keyList = rows.results || [];
-
-  // Aggregate usage stats per key
-  const keyIds = keyList.map((k) => k.id);
-  const statsMap = new Map<
-    string,
-    { calls: number; total_tokens: number; errors: number }
-  >();
-
-  if (keyIds.length > 0) {
-    const placeholders = keyIds.map(() => "?").join(",");
-    const stats = await env.DB.prepare(
-      `SELECT api_key_id,
-              COUNT(*) AS calls,
-              COALESCE(SUM(total_tokens), 0) AS total_tokens,
-              COUNT(CASE WHEN status = 'error' OR status = 'pending_reconcile' THEN 1 END) AS errors
-       FROM meteria402_requests
-       WHERE api_key_id IN (${placeholders})
-       GROUP BY api_key_id`,
-    )
-      .bind(...keyIds)
-      .all<{
-        api_key_id: string;
-        calls: number;
-        total_tokens: number;
-        errors: number;
-      }>();
-
-    for (const row of stats.results || []) {
-      statsMap.set(row.api_key_id, {
-        calls: Number(row.calls),
-        total_tokens: Number(row.total_tokens),
-        errors: Number(row.errors),
-      });
-    }
-  }
-
   return jsonResponse({
-    api_keys: keyList.map((row) => {
-      const stats = statsMap.get(row.id) || {
-        calls: 0,
-        total_tokens: 0,
-        errors: 0,
-      };
-      return {
-        id: row.id,
-        name: row.name || "Unnamed key",
-        prefix: row.key_prefix,
-        key_suffix: row.key_suffix,
-        status: keyStatus(row.revoked_at, row.expires_at, row.spend_limit, row.spent_amount),
-        expires_at: row.expires_at,
-        spend_limit: row.spend_limit,
-        spent_amount: row.spent_amount,
-        created_at: row.created_at,
-        revoked_at: row.revoked_at,
-        calls: stats.calls,
-        total_tokens: stats.total_tokens,
-        total_cost: row.spent_amount,
-        errors: stats.errors,
-      };
-    }),
+    api_keys: (rows.results || []).map((row) => ({
+      id: row.id,
+      name: row.name || "Unnamed key",
+      prefix: row.key_prefix,
+      key_suffix: row.key_suffix,
+      status: keyStatus(row.revoked_at, row.expires_at, row.spend_limit, row.spent_amount),
+      expires_at: row.expires_at,
+      spend_limit: row.spend_limit,
+      spent_amount: row.spent_amount,
+      created_at: row.created_at,
+      revoked_at: row.revoked_at,
+      total_cost: row.spent_amount,
+    })),
   });
 }
 
@@ -401,7 +354,7 @@ export async function handleCreateApiKey(
   );
 }
 
-export async function handleRevokeApiKey(
+export async function handleDisableApiKey(
   request: Request,
   env: Env,
   apiKeyId: string,
@@ -412,7 +365,7 @@ export async function handleRevokeApiKey(
   const result = await env.DB.prepare(
     `UPDATE meteria402_api_keys
      SET revoked_at = COALESCE(revoked_at, ?)
-     WHERE id = ? AND account_id = ?`,
+     WHERE id = ? AND account_id = ? AND deleted_at IS NULL`,
   )
     .bind(now, apiKeyId, account.id)
     .run();
@@ -423,8 +376,76 @@ export async function handleRevokeApiKey(
 
   return jsonResponse({
     api_key_id: apiKeyId,
-    status: "revoked",
+    status: "disabled",
     revoked_at: now,
+  });
+}
+
+export async function handleEnableApiKey(
+  request: Request,
+  env: Env,
+  apiKeyId: string,
+): Promise<Response> {
+  const account = await requireAccountFromSession(request, env);
+
+  const result = await env.DB.prepare(
+    `UPDATE meteria402_api_keys
+     SET revoked_at = NULL
+     WHERE id = ? AND account_id = ? AND deleted_at IS NULL`,
+  )
+    .bind(apiKeyId, account.id)
+    .run();
+
+  if (result.meta.changes === 0) {
+    return errorResponse(404, "api_key_not_found", "API key was not found.");
+  }
+
+  const row = await env.DB.prepare(
+    `SELECT expires_at, spend_limit, spent_amount
+     FROM meteria402_api_keys
+     WHERE id = ? AND account_id = ? AND deleted_at IS NULL`,
+  )
+    .bind(apiKeyId, account.id)
+    .first<{
+      expires_at: string | null;
+      spend_limit: number | null;
+      spent_amount: number;
+    }>();
+
+  return jsonResponse({
+    api_key_id: apiKeyId,
+    status: row
+      ? keyStatus(null, row.expires_at, row.spend_limit, row.spent_amount)
+      : "active",
+    revoked_at: null,
+  });
+}
+
+export async function handleDeleteApiKey(
+  request: Request,
+  env: Env,
+  apiKeyId: string,
+): Promise<Response> {
+  const account = await requireAccountFromSession(request, env);
+
+  const now = new Date().toISOString();
+  const result = await env.DB.prepare(
+    `UPDATE meteria402_api_keys
+     SET deleted_at = COALESCE(deleted_at, ?),
+         revoked_at = COALESCE(revoked_at, ?)
+     WHERE id = ? AND account_id = ?`,
+  )
+    .bind(now, now, apiKeyId, account.id)
+    .run();
+
+  if (result.meta.changes === 0) {
+    return errorResponse(404, "api_key_not_found", "API key was not found.");
+  }
+
+  return jsonResponse({
+    api_key_id: apiKeyId,
+    status: "deleted",
+    deleted_at: now,
   });
 }
 
