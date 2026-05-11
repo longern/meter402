@@ -1,7 +1,7 @@
 import { normalizeAutopayUrl } from "./autopay";
 import { base64UrlDecodeBytes, base64UrlDecodeText, base64UrlEncodeBytes, base64UrlEncodeText, canonicalJson } from "./crypto";
 import { HttpError, requireString } from "./http";
-import type { DepositAutopayState, DepositIntentState, DepositQuoteState, Env, LoginChallengeState, PaymentRequirement, SessionState } from "./types";
+import type { DepositAutopayState, DepositIntentState, DepositQuoteState, Env, LoginChallengeState, OwnerRebindChallengeState, PaymentRequirement, SessionState } from "./types";
 
 export async function signDepositQuote(env: Env, state: DepositQuoteState): Promise<string> {
   const payload = base64UrlEncodeText(canonicalJson(state));
@@ -60,6 +60,21 @@ export async function verifyLoginChallengeState(env: Env, token: string): Promis
   const state = normalizeLoginChallengeState(parsed);
   if (state.expires_at <= Date.now()) {
     throw new HttpError(410, "login_challenge_expired", "Login challenge has expired.");
+  }
+  return state;
+}
+
+export async function signOwnerRebindChallengeState(env: Env, state: OwnerRebindChallengeState): Promise<string> {
+  const payload = base64UrlEncodeText(canonicalJson(state));
+  const signature = await hmacSha256Base64Url(requireLoginStateSecret(env), payload);
+  return `${payload}.${signature}`;
+}
+
+export async function verifyOwnerRebindChallengeState(env: Env, token: string): Promise<OwnerRebindChallengeState> {
+  const parsed = await verifySignedJson(env, token, "owner_rebind_challenge");
+  const state = normalizeOwnerRebindChallengeState(parsed);
+  if (state.expires_at <= Date.now()) {
+    throw new HttpError(410, "owner_rebind_challenge_expired", "Owner rebind challenge has expired.");
   }
   return state;
 }
@@ -129,6 +144,32 @@ function normalizeLoginChallengeState(value: unknown): LoginChallengeState {
   return {
     address: requireString(state.address, "address"),
     request_id: typeof state.request_id === "string" && state.request_id.trim() ? state.request_id : undefined,
+    nonce: requireString(state.nonce, "nonce"),
+    domain: requireString(state.domain, "domain"),
+    uri: requireString(state.uri, "uri"),
+    chain_id: chainId,
+    issued_at: requireString(state.issued_at, "issued_at"),
+    expires_at: expiresAt,
+  };
+}
+
+function normalizeOwnerRebindChallengeState(value: unknown): OwnerRebindChallengeState {
+  if (!value || typeof value !== "object") {
+    throw new HttpError(400, "invalid_owner_rebind_challenge", "Owner rebind challenge must be an object.");
+  }
+  const state = value as Record<string, unknown>;
+  const expiresAt = typeof state.expires_at === "number" ? state.expires_at : 0;
+  const chainId = typeof state.chain_id === "number" ? state.chain_id : 0;
+  if (!Number.isFinite(expiresAt) || expiresAt <= 0) {
+    throw new HttpError(400, "invalid_owner_rebind_challenge", "Owner rebind challenge expiration is invalid.");
+  }
+  if (!Number.isSafeInteger(chainId) || chainId <= 0) {
+    throw new HttpError(400, "invalid_owner_rebind_challenge", "Owner rebind chain ID is invalid.");
+  }
+  return {
+    account_id: requireString(state.account_id, "account_id"),
+    old_owner: requireString(state.old_owner, "old_owner"),
+    new_owner: requireString(state.new_owner, "new_owner"),
     nonce: requireString(state.nonce, "nonce"),
     domain: requireString(state.domain, "domain"),
     uri: requireString(state.uri, "uri"),

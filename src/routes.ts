@@ -32,6 +32,8 @@ export type RouteHandlers = {
   handleDepositAutopayComplete: IdHandler;
   handleGetAccount: Handler;
   handleUpdateAccount: Handler;
+  handleCreateOwnerRebindChallenge: Handler;
+  handleCompleteOwnerRebind: Handler;
   handleListApiKeys: Handler;
   handleCreateApiKey: Handler;
   handleRevokeApiKey: IdHandler;
@@ -189,6 +191,12 @@ async function dispatchBillingRoute(
   }
   if (method === "PATCH" && url.pathname === "/api/account") {
     return handlers.handleUpdateAccount(request, env);
+  }
+  if (method === "POST" && url.pathname === "/api/account/owner-rebind/challenge") {
+    return handlers.handleCreateOwnerRebindChallenge(request, env);
+  }
+  if (method === "POST" && url.pathname === "/api/account/owner-rebind/complete") {
+    return handlers.handleCompleteOwnerRebind(request, env);
   }
   if (method === "GET" && url.pathname === "/api/api-keys") {
     return handlers.handleListApiKeys(request, env);

@@ -8,6 +8,7 @@ import RechargeView from "./views/RechargeView";
 import KeysView from "./views/KeysView";
 import UsageView from "./views/UsageView";
 import AutopayView from "./views/AutopayView";
+import SettingsView from "./views/SettingsView";
 import { GATEWAY_PROVIDERS } from "./gatewayProviders";
 import { normalizeApiError } from "./apiError";
 import {
@@ -124,7 +125,7 @@ function HomePage() {
             <p>Point each provider SDK at the matching Meteria402 path.</p>
           </div>
           <pre className="code-sample">{`const client = new OpenAI({
-  apiKey: "meteria402_xxx",
+  apiKey: "mia2_xxx",
   baseURL: "https://your-worker.example.com/v1",
 });`}</pre>
         </section>
@@ -718,6 +719,7 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
     { href: "/console/autopay", view: "autopay", label: "Autopay Limits" },
     { href: "/console/keys", view: "keys", label: "API Keys" },
     { href: "/console/usage", view: "usage", label: "Usage" },
+    { href: "/console/settings", view: "settings", label: "Settings" },
   ];
 
   function closeSidebar() {
@@ -905,6 +907,19 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
             setCapTtlDays={setCapTtlDays}
             capApprovalCopied={capApprovalCopied}
             copyCapApprovalLink={copyCapApprovalLink}
+          />
+        )}
+
+        {!accountMissing && activeView === "settings" && (
+          <SettingsView
+            identity={identity}
+            account={account}
+            isBusy={isBusy}
+            busy={busy}
+            request={request}
+            show={show}
+            onSessionChange={onSessionChange}
+            loadAccount={loadAccount}
           />
         )}
       </main>

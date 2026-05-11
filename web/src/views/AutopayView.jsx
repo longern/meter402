@@ -90,7 +90,7 @@ export default function AutopayView({
           titleId="create-cap-title"
         >
           <form onSubmit={createCapability}>
-            <div className="grid single">
+            <div className="dialog-form">
               <label>
                 <span>Total budget (USDC)</span>
                 <input value={capTotalBudget} inputMode="decimal" onChange={(e) => setCapTotalBudget(e.target.value)} />
@@ -104,7 +104,7 @@ export default function AutopayView({
                 <input type="number" min={1} max={30} value={capTtlDays} onChange={(e) => setCapTtlDays(parseInt(e.target.value, 10) || 7)} />
               </label>
             </div>
-            <div className="modal-actions">
+            <div className="dialog-actions">
               <button type="button" className="secondary" onClick={closeCapCreate}>Cancel</button>
               <button type="submit" className="primary" disabled={isBusy}>
                 {busy === "createCapability" ? "Creating..." : "Create limit"}
@@ -184,7 +184,7 @@ export default function AutopayView({
                 </p>
                 {capDialog.error && <p className="form-error">{capDialog.error}</p>}
                 <div className="wallet-row">
-                  <button type="button" onClick={closeCapDialog}>Close</button>
+                  <button type="button" className="secondary" onClick={closeCapDialog}>Close</button>
                 </div>
               </div>
             )}

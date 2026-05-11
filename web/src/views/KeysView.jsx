@@ -196,7 +196,7 @@ export default function KeysView({
           titleId="create-key-title"
         >
           <form onSubmit={createManagedApiKey}>
-            <div className="grid single">
+            <div className="dialog-form">
               <label>
                 <span>Name</span>
                 <input value={newKeyName} placeholder="Auto-generated if empty" onChange={(event) => setNewKeyName(event.target.value)} />
@@ -213,7 +213,7 @@ export default function KeysView({
                 <code>{newApiKey}</code>
               </div>
             )}
-            <div className="modal-actions">
+            <div className="dialog-actions">
               <button type="button" className="secondary" onClick={closeCreateKeyDialog}>Close</button>
               <button type="submit" className="primary" disabled={busy === "createApiKey"}>
                 {busy === "createApiKey" ? "Creating..." : "Create key"}

@@ -145,8 +145,20 @@ p {
   margin-top: 28px;
 }
 
-.button-link,
 button {
+  border: 0;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.button-link,
+.btn,
+button.primary,
+button.secondary,
+button.text-button {
   border: 0;
   border-radius: 6px;
   padding: 10px 14px;
@@ -158,6 +170,7 @@ button {
 }
 
 .button-link.primary,
+.btn.primary,
 button.primary {
   position: relative;
   isolation: isolate;
@@ -167,6 +180,7 @@ button.primary {
 }
 
 .button-link.primary::before,
+.btn.primary::before,
 button.primary::before {
   content: "";
   position: absolute;
@@ -178,42 +192,45 @@ button.primary::before {
 }
 
 .button-link.primary:hover::before,
+.btn.primary:hover::before,
 button.primary:hover::before,
 .button-link.primary:focus-visible::before,
+.btn.primary:focus-visible::before,
 button.primary:focus-visible::before {
   opacity: 1;
 }
 
-button {
+.btn {
   background: #111827;
   color: #fff;
 }
 
-button:not(.primary):not(.secondary):not(.text-button):not(.icon-button):not(
-    .modal-scrim
-  ):not(.sidebar-scrim):not(.approval-copy-button):not(.address-copy-button):hover,
-button:not(.primary):not(.secondary):not(.text-button):not(.icon-button):not(
-    .modal-scrim
-  ):not(.sidebar-scrim):not(.approval-copy-button):not(.address-copy-button):focus-visible {
+.btn:hover,
+.btn:focus-visible {
   background: #374151;
 }
 
 .button-link.secondary,
+.btn.secondary,
 button.secondary {
   background: #e5e7eb;
   color: #111827;
 }
 
-.text-button {
+.text-button,
+button.text-button {
   background: transparent;
   color: #047857;
 }
 
 .text-button:hover,
-.text-button:focus-visible {
+button.text-button:hover,
+.text-button:focus-visible,
+button.text-button:focus-visible {
   background: #ecfdf5;
 }
 
+.danger,
 button.danger {
   color: #991b1b;
 }
@@ -709,31 +726,42 @@ button:disabled {
 
 .wallet-deeplink-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
-  gap: 14px;
+  gap: 12px;
+  margin-top: 8px;
 }
 
 .wallet-icon-link {
-  width: 52px;
-  height: 52px;
-  display: inline-grid;
-  place-items: center;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   box-sizing: border-box;
-  border: 1px solid #d1d5db;
-  border-radius: 999px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
   background: #fff;
+  overflow: hidden;
+  transition:
+    transform 0.15s,
+    box-shadow 0.15s;
+}
+
+.wallet-icon-link:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
 
 .wallet-icon-link[aria-disabled="true"] {
-  opacity: 0.42;
+  opacity: 0.4;
   pointer-events: none;
 }
 
 .wallet-icon-link img {
-  width: 32px;
-  height: 32px;
-  display: block;
-  border-radius: 8px;
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
 }
 
 .button-link[aria-disabled="true"] {
@@ -828,6 +856,23 @@ textarea {
   margin-top: 12px;
 }
 
+.dialog-form > * + * {
+  margin-top: 12px;
+}
+
+.dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.dialog-actions button {
+  width: auto;
+  min-width: 0;
+}
+
 .row {
   display: flex;
   flex-wrap: wrap;
@@ -885,6 +930,63 @@ textarea {
 
 .key-status + .grid {
   margin-top: 14px;
+}
+
+.settings-owner-panel {
+  min-width: 0;
+}
+
+.settings-field-label {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.4;
+  margin-bottom: 6px;
+}
+
+.settings-owner-panel strong {
+  display: block;
+  font-size: 18px;
+}
+
+.settings-owner-panel code {
+  display: block;
+  min-width: 0;
+  margin-top: 6px;
+  color: #374151;
+  font:
+    12px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Consolas,
+    monospace;
+  overflow-wrap: anywhere;
+}
+
+.settings-dialog-content > * + * {
+  margin-top: 16px;
+}
+
+.settings-rebind-form > * + * {
+  margin-top: 12px;
+}
+
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.settings-actions button {
+  width: auto;
+}
+
+.form-status {
+  margin: 0;
+  color: #374151;
+  font-size: 13px;
 }
 
 .generated-key {
@@ -982,58 +1084,6 @@ textarea {
 .activation-actions {
   display: flex;
   justify-content: flex-end;
-}
-
-.modal-layer {
-  position: fixed;
-  z-index: 50;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  padding: 18px;
-}
-
-.modal-scrim {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: rgba(17, 24, 39, 0.38);
-  cursor: default;
-}
-
-.console-main .modal-panel {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  flex-direction: column;
-  width: min(520px, calc(100% - 32px));
-  max-height: min(720px, calc(100dvh - 36px));
-  overflow: hidden;
-  margin-top: 0;
-  background: #fff;
-  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.22);
-}
-
-.modal-close {
-  flex-shrink: 0;
-  border: none;
-  background: transparent;
-}
-
-.modal-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 16px;
-}
-
-.modal-actions button {
-  min-width: 0;
 }
 
 .payment-modal {
@@ -1392,8 +1442,7 @@ textarea {
   }
 
   .feature-grid,
-  .endpoint-picker,
-  .grid {
+  .endpoint-picker {
     grid-template-columns: 1fr;
   }
 
@@ -1512,19 +1561,6 @@ textarea {
     gap: 14px;
   }
 
-  .modal-layer {
-    padding: 12px;
-  }
-
-  .console-main .modal-panel {
-    width: 100%;
-    max-height: calc(100dvh - 24px);
-  }
-
-  .modal-actions {
-    flex-direction: column;
-  }
-
   .payment-qr-panel img,
   .payment-qr-placeholder {
     margin-inline: auto;
@@ -1551,17 +1587,18 @@ textarea {
     grid-template-columns: 1fr;
   }
 
-  button,
-  .button-link {
-    width: 100%;
-    box-sizing: border-box;
-    text-align: center;
-  }
-
   .text-button {
     width: auto;
     padding-inline: 0;
     text-align: left;
+  }
+
+  .settings-actions {
+    justify-content: flex-end;
+  }
+
+  .settings-actions button {
+    width: auto;
   }
 
   .icon-button {
@@ -1774,44 +1811,4 @@ textarea {
 
 .small {
   font-size: 13px;
-}
-
-/* Wallet icon links in DepositDialog */
-.wallet-deeplink-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 12px;
-  margin-top: 8px;
-}
-
-.wallet-icon-link {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
-  background: #fff;
-  border: 1px solid #e5e7eb;
-  transition:
-    transform 0.15s,
-    box-shadow 0.15s;
-  overflow: hidden;
-}
-
-.wallet-icon-link:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-}
-
-.wallet-icon-link[aria-disabled="true"] {
-  opacity: 0.4;
-  pointer-events: none;
-}
-
-.wallet-icon-link img {
-  width: 28px;
-  height: 28px;
-  object-fit: contain;
 }

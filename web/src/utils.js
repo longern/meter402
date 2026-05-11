@@ -59,6 +59,7 @@ export function getConsoleView(pathname) {
   if (pathname === "/console/keys") return "keys";
   if (pathname === "/console/usage") return "usage";
   if (pathname === "/console/autopay") return "autopay";
+  if (pathname === "/console/settings") return "settings";
   return "recharge";
 }
 
@@ -66,6 +67,7 @@ export function consoleViewSubtitle(view) {
   if (view === "keys") return "Create and revoke keys used by clients calling the metered AI gateway.";
   if (view === "usage") return "Inspect account balance, model call records, and payable invoices.";
   if (view === "autopay") return "Manage autopay pre-approvals and spending limits.";
+  if (view === "settings") return "Manage account-level settings.";
   return "Create a refundable deposit and receive an API key for metered model calls.";
 }
 

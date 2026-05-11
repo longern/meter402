@@ -4,11 +4,11 @@ import { HttpError } from "./http";
 export async function createApiKey(): Promise<{ id: string; secret: string; prefix: string; keySuffix: string }> {
   const id = makeId("key");
   const token = base64UrlRandom(32);
-  const secret = `meteria402_${token}`;
+  const secret = `mia2_${token}`;
   return {
     id,
     secret,
-    prefix: "meteria402",
+    prefix: "mia2",
     keySuffix: secret.slice(-4),
   };
 }

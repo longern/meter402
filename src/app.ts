@@ -1,5 +1,7 @@
 import {
 handleCreateApiKey,
+handleCompleteOwnerRebind,
+handleCreateOwnerRebindChallenge,
 handleGetAccount,
 handleListApiKeys,
 handleListDeposits,
@@ -62,6 +64,8 @@ export const routeHandlers: RouteHandlers = {
   handleDepositAutopayComplete,
   handleGetAccount,
   handleUpdateAccount,
+  handleCreateOwnerRebindChallenge,
+  handleCompleteOwnerRebind,
   handleListApiKeys,
   handleCreateApiKey,
   handleRevokeApiKey,

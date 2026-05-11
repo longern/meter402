@@ -106,6 +106,18 @@ export type LoginChallengeState = {
   expires_at: number;
 };
 
+export type OwnerRebindChallengeState = {
+  account_id: string;
+  old_owner: string;
+  new_owner: string;
+  nonce: string;
+  domain: string;
+  uri: string;
+  chain_id: number;
+  issued_at: string;
+  expires_at: number;
+};
+
 export type SessionState = {
   owner: string;
   expires_at: number;

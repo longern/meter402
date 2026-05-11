@@ -7,12 +7,16 @@ export default function CardSection({
   actions,
   children,
   className = "",
+  contentClassName = "",
   as: Component = "section",
   ...sectionProps
 }) {
   const cardClassName = className
     ? `${styles.cardSection} ${className}`
     : styles.cardSection;
+  const contentClass = contentClassName
+    ? `${styles.content} ${contentClassName}`
+    : styles.content;
 
   return (
     <Component className={cardClassName} {...sectionProps}>
@@ -24,7 +28,7 @@ export default function CardSection({
         {actions && <div className={styles.actions}>{actions}</div>}
       </div>
       <hr className={styles.divider} />
-      <div className={styles.content}>
+      <div className={contentClass}>
         {children}
       </div>
     </Component>

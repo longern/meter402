@@ -29,8 +29,11 @@
 }
 
 .divider {
+  flex: 0 0 1px;
   border: 0;
   height: 1px;
+  min-height: 1px;
+  width: 100%;
   background-color: #e5e7eb;
   margin-block-start: 0;
   margin-block-end: 0;
@@ -38,39 +41,4 @@
 
 .content {
   padding: 16px;
-}
-
-.cardSection:global(.modal-panel) .header {
-  flex: 0 0 auto;
-  align-items: flex-start;
-  gap: 12px;
-  min-height: 0;
-  padding-top: 16px;
-  padding-bottom: 12px;
-}
-
-.cardSection:global(.modal-panel) .actions {
-  align-self: flex-start;
-  flex: 0 0 auto;
-  margin-top: -6px;
-}
-
-.cardSection:global(.modal-panel) .header > :first-child {
-  min-width: 0;
-}
-
-.cardSection:global(.modal-panel) .subtitle {
-  max-width: 34rem;
-}
-
-.cardSection:global(.modal-panel) .divider {
-  flex: 0 0 1px;
-  width: 100%;
-  min-height: 1px;
-}
-
-.cardSection:global(.modal-panel) .content {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
 }

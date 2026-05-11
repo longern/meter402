@@ -297,7 +297,7 @@ export default function PayDepositPage() {
           <CardSection title="Invalid Payment Link">
             <p className="form-error">{error}</p>
             <div className="pay-deposit-actions" style={{ marginTop: 24 }}>
-              <button onClick={goHome}>Go Home</button>
+              <button className="secondary" onClick={goHome}>Go Home</button>
             </div>
           </CardSection>
         </main>
@@ -420,7 +420,7 @@ export default function PayDepositPage() {
             <p className="form-error">{error}</p>
             {debugInfo && <p className="muted small" style={{ marginTop: 8 }}>{debugInfo}</p>}
             <div className="pay-deposit-actions" style={{ marginTop: 24 }}>
-              <button onClick={() => setStatus("ready")}>Try Again</button>
+              <button className="secondary" onClick={() => setStatus("ready")}>Try Again</button>
               <button className="text-button" onClick={goHome}>
                 Go Home
               </button>

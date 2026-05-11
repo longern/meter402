@@ -214,7 +214,7 @@ Use the generated API key with any OpenAI-compatible client:
 import OpenAI from "openai";
 
 const client = new OpenAI({
-  apiKey: "meteria402_xxx",
+  apiKey: "mia2_xxx",
   baseURL: "https://your-worker.example.com/v1",
 });
 
@@ -228,7 +228,7 @@ For the Cloudflare unified OpenAI-compatible endpoint, use:
 
 ```ts
 const client = new OpenAI({
-  apiKey: "meteria402_xxx",
+  apiKey: "mia2_xxx",
   baseURL: "https://your-worker.example.com/compat",
 });
 

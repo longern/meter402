@@ -123,18 +123,6 @@ export default function RechargeView({
                   </button>
                 </div>
               </div>
-              {autopayWalletBalance && (
-                <>
-                  <span className="balance-label">Address</span>
-                  <span className="balance-value mono">
-                    {shortAddress(autopayWalletBalance.address)}
-                  </span>
-                  <span className="balance-label">Balance</span>
-                  <span className="balance-value">
-                    {autopayWalletBalance.balance} {autopayWalletBalance.symbol}
-                  </span>
-                </>
-              )}
               <span className="balance-label">Address</span>
               <div className="address-row">
                 <span className="balance-value mono">
@@ -244,13 +232,13 @@ export default function RechargeView({
 
       {editEndpointOpen && (
         <Modal open={editEndpointOpen} onClose={closeEditEndpointDialog} title="Edit Autopay Endpoint" titleId="edit-endpoint-title">
-          <div className="grid single">
+          <div className="dialog-form">
             <label>
               <span>Endpoint URL</span>
               <input value={autopayUrl} autoComplete="url" onChange={(event) => setAutopayUrl(event.target.value)} />
             </label>
           </div>
-          <div className="modal-actions">
+          <div className="dialog-actions">
             <button type="button" className="secondary" onClick={closeEditEndpointDialog}>Cancel</button>
             <button type="button" className="primary" disabled={isBusy || !autopayUrl.trim()} onClick={updateAutopayEndpoint}>Save</button>
           </div>
@@ -309,7 +297,7 @@ export default function RechargeView({
                   </a>
                 )}
                 {(paymentDialog.status === "settled" || paymentDialog.status === "failed") && (
-                  <button type="button" onClick={closePaymentDialog}>Close</button>
+                  <button type="button" className="secondary" onClick={closePaymentDialog}>Close</button>
                 )}
               </div>
             </div>

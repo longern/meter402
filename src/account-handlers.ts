@@ -1,30 +1,38 @@
+import { requireAccountFromSession } from "./accounts";
 import {
-requireAccountFromSession
-} from "./accounts";
-import {
-createApiKey,
-keyStatus,
-normalizeApiKeyExpiresAt,
-normalizeApiKeyName
+  createApiKey,
+  keyStatus,
+  normalizeApiKeyExpiresAt,
+  normalizeApiKeyName,
 } from "./api-keys";
-import { sha256Hex } from "./crypto";
+import { verifyMessage, type Hex } from "viem";
+import { base64UrlRandom, sha256Hex } from "./crypto";
 import {
-errorResponse,
-jsonResponse,
-readJsonObject,
-readOptionalJsonObject
+  errorResponse,
+  HttpError,
+  jsonResponse,
+  readJsonObject,
+  readOptionalJsonObject,
 } from "./http";
+import { formatMoney, parseMoney } from "./money";
+import { serializeExpiredSessionCookie } from "./session";
 import {
-formatMoney,
-parseMoney
-} from "./money";
-import type {
-Env
-} from "./types";
+  signOwnerRebindChallengeState,
+  verifyOwnerRebindChallengeState,
+} from "./signed-state";
+import type { Env, OwnerRebindChallengeState } from "./types";
+import { normalizeEvmAddress } from "./x402";
 
 import { reconcilePendingGatewayLogs } from "./v1-handlers";
 
-export async function handleGetAccount(request: Request, env: Env): Promise<Response> {
+const OWNER_REBIND_TTL_SECONDS = 5 * 60;
+const OWNER_REBIND_STATEMENT = "Confirm Meteria402 main wallet rebinding.";
+const OWNER_REBIND_RESOURCE_PREFIX = "urn:meteria402:owner-rebind:";
+
+export async function handleGetAccount(
+  request: Request,
+  env: Env,
+): Promise<Response> {
   const account = await requireAccountFromSession(request, env);
 
   return jsonResponse({
@@ -35,21 +43,28 @@ export async function handleGetAccount(request: Request, env: Env): Promise<Resp
     unpaid_invoice_total: formatMoney(account.unpaid_invoice_total),
     concurrency_limit: account.concurrency_limit,
     min_deposit_required: formatMoney(account.min_deposit_required),
-    autopay_min_recharge_amount: formatMoney(account.autopay_min_recharge_amount),
+    autopay_min_recharge_amount: formatMoney(
+      account.autopay_min_recharge_amount,
+    ),
   });
 }
 
-export async function handleUpdateAccount(request: Request, env: Env): Promise<Response> {
+export async function handleUpdateAccount(
+  request: Request,
+  env: Env,
+): Promise<Response> {
   const account = await requireAccountFromSession(request, env);
   const body = await readJsonObject(request);
   const newAmount = parseMoney(
-    String(body.autopay_min_recharge_amount ?? body.autopayMinRechargeAmount ?? "0"),
+    String(
+      body.autopay_min_recharge_amount ?? body.autopayMinRechargeAmount ?? "0",
+    ),
   );
-  if (newAmount < 0) {
+  if (newAmount < 10_000) {
     return errorResponse(
       400,
       "invalid_amount",
-      "autopay_min_recharge_amount must be a non-negative decimal.",
+      "autopay_min_recharge_amount must be at least 0.01 USDC.",
     );
   }
 
@@ -65,6 +80,186 @@ export async function handleUpdateAccount(request: Request, env: Env): Promise<R
     autopay_min_recharge_amount: formatMoney(newAmount),
     updated_at: now,
   });
+}
+
+export async function handleCreateOwnerRebindChallenge(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const account = await requireAccountFromSession(request, env);
+  if (!account.owner_address) {
+    return errorResponse(
+      409,
+      "missing_owner",
+      "Account does not have an owner wallet.",
+    );
+  }
+  if (account.status !== "active") {
+    return errorResponse(
+      409,
+      "account_not_active",
+      "Only active accounts can rebind the main wallet.",
+    );
+  }
+
+  const body = await readJsonObject(request);
+  const newOwner = normalizeEvmAddress(body.new_owner ?? body.newOwner);
+  const oldOwner = normalizeEvmAddress(account.owner_address);
+  if (newOwner.toLowerCase() === oldOwner.toLowerCase()) {
+    return errorResponse(
+      400,
+      "same_owner",
+      "New owner wallet must be different from the current owner.",
+    );
+  }
+
+  const existing = await env.DB.prepare(
+    `SELECT id FROM meteria402_accounts WHERE lower(owner_address) = lower(?) LIMIT 1`,
+  )
+    .bind(newOwner)
+    .first<{ id: string }>();
+  if (existing && existing.id !== account.id) {
+    return errorResponse(
+      409,
+      "owner_already_bound",
+      "This wallet is already bound to another account.",
+    );
+  }
+
+  const origin = requestOrigin(request);
+  const originUrl = new URL(origin);
+  const issuedAt = new Date().toISOString();
+  const expiresAt = Date.now() + OWNER_REBIND_TTL_SECONDS * 1000;
+  const state: OwnerRebindChallengeState = {
+    account_id: account.id,
+    old_owner: oldOwner,
+    new_owner: newOwner,
+    nonce: base64UrlRandom(12),
+    domain: originUrl.host,
+    uri: originUrl.origin,
+    chain_id: chainIdFromEnv(env),
+    issued_at: issuedAt,
+    expires_at: expiresAt,
+  };
+  return jsonResponse(
+    {
+      challenge_token: await signOwnerRebindChallengeState(env, state),
+      message: buildOwnerRebindMessage(state),
+      old_owner: state.old_owner,
+      new_owner: state.new_owner,
+      expires_at: new Date(expiresAt).toISOString(),
+    },
+    { status: 201 },
+  );
+}
+
+export async function handleCompleteOwnerRebind(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const account = await requireAccountFromSession(request, env);
+  const body = await readJsonObject(request);
+  const challengeToken = requireBodyString(
+    body.challenge_token ?? body.challengeToken,
+    "challenge_token",
+  );
+  const message = requireBodyString(body.message, "message");
+  const signature = requireBodyString(body.signature, "signature") as Hex;
+  const state = await verifyOwnerRebindChallengeState(env, challengeToken);
+  const currentOwner = normalizeEvmAddress(account.owner_address);
+
+  if (state.account_id !== account.id) {
+    throw new HttpError(
+      403,
+      "owner_rebind_account_mismatch",
+      "Owner rebind challenge is not bound to this account.",
+    );
+  }
+  if (
+    normalizeEvmAddress(state.old_owner).toLowerCase() !==
+    currentOwner.toLowerCase()
+  ) {
+    throw new HttpError(
+      403,
+      "owner_rebind_old_owner_mismatch",
+      "Owner rebind challenge does not match the current owner.",
+    );
+  }
+  if (message !== buildOwnerRebindMessage(state)) {
+    throw new HttpError(
+      403,
+      "owner_rebind_message_mismatch",
+      "Owner rebind message does not match the challenge.",
+    );
+  }
+
+  const valid = await verifyMessage({
+    address: normalizeEvmAddress(state.old_owner) as `0x${string}`,
+    message,
+    signature,
+  });
+  if (!valid) {
+    throw new HttpError(
+      403,
+      "invalid_signature",
+      "Owner rebind signature is invalid.",
+    );
+  }
+
+  const existing = await env.DB.prepare(
+    `SELECT id FROM meteria402_accounts WHERE lower(owner_address) = lower(?) LIMIT 1`,
+  )
+    .bind(state.new_owner)
+    .first<{ id: string }>();
+  if (existing && existing.id !== account.id) {
+    return errorResponse(
+      409,
+      "owner_already_bound",
+      "This wallet is already bound to another account.",
+    );
+  }
+
+  const now = new Date().toISOString();
+  const [ownerUpdate] = await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE meteria402_accounts
+       SET owner_address = ?, updated_at = ?
+       WHERE id = ? AND lower(owner_address) = lower(?)`,
+    ).bind(
+      normalizeEvmAddress(state.new_owner),
+      now,
+      account.id,
+      state.old_owner,
+    ),
+    env.DB.prepare(
+      `UPDATE meteria402_autopay_capabilities
+       SET revoked_at = COALESCE(revoked_at, ?)
+       WHERE account_id = ? AND revoked_at IS NULL`,
+    ).bind(now, account.id),
+  ]);
+  if (ownerUpdate.meta.changes === 0) {
+    throw new HttpError(
+      409,
+      "owner_rebind_conflict",
+      "Account owner changed before the rebind completed.",
+    );
+  }
+
+  return jsonResponse(
+    {
+      account_id: account.id,
+      old_owner: state.old_owner,
+      new_owner: state.new_owner,
+      status: "owner_rebound",
+      revoked_autopay_capabilities: true,
+      requires_login: true,
+    },
+    {
+      headers: {
+        "set-cookie": serializeExpiredSessionCookie(request),
+      },
+    },
+  );
 }
 
 export async function handleListApiKeys(
@@ -380,4 +575,71 @@ export async function handleReconcileRequests(
   const account = await requireAccountFromSession(request, env);
   const result = await reconcilePendingGatewayLogs(env, account.id);
   return jsonResponse(result);
+}
+
+function buildOwnerRebindMessage(state: OwnerRebindChallengeState): string {
+  return [
+    `${state.domain} wants you to confirm your Ethereum account:`,
+    state.old_owner,
+    "",
+    OWNER_REBIND_STATEMENT,
+    "",
+    `Account ID: ${state.account_id}`,
+    `Old owner: ${state.old_owner}`,
+    `New owner: ${state.new_owner}`,
+    "",
+    `URI: ${state.uri}`,
+    "Version: 1",
+    `Chain ID: ${state.chain_id}`,
+    `Nonce: ${state.nonce}`,
+    `Issued At: ${state.issued_at}`,
+    `Expiration Time: ${new Date(state.expires_at).toISOString()}`,
+    "Resources:",
+    `- ${OWNER_REBIND_RESOURCE_PREFIX}${state.account_id}:${state.nonce}`,
+  ].join("\n");
+}
+
+function requireBodyString(value: unknown, field: string): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new HttpError(400, "missing_field", `${field} is required.`);
+  }
+  return value;
+}
+
+function requestOrigin(request: Request): string {
+  const origin = request.headers.get("origin");
+  if (origin) {
+    const parsed = new URL(origin);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      return parsed.origin;
+    }
+  }
+  const url = new URL(request.url);
+  const referer = request.headers.get("referer");
+  if (referer) {
+    const parsed = new URL(referer);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      return parsed.origin;
+    }
+  }
+  const host = request.headers.get("host");
+  if (host) {
+    const protocol =
+      request.headers.get("x-forwarded-proto") || url.protocol.replace(":", "");
+    return `${protocol === "https" ? "https" : "http"}://${host}`;
+  }
+  return url.origin;
+}
+
+function chainIdFromEnv(env: Env): number {
+  const network = env.X402_NETWORK || "eip155:8453";
+  const chainId = Number(network.split(":")[1] || "8453");
+  if (!Number.isSafeInteger(chainId) || chainId <= 0) {
+    throw new HttpError(
+      500,
+      "invalid_owner_rebind_network",
+      "X402_NETWORK must include an EVM chain ID.",
+    );
+  }
+  return chainId;
 }

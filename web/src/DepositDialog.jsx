@@ -281,7 +281,7 @@ export default function DepositDialog({
 
   return (
     <Modal open={open} onClose={onClose} title="Add Deposit" titleId="deposit-title">
-      <div className="grid single">
+      <div className="dialog-form">
         <label>
           <span>Deposit amount</span>
           <div className="input-row">
