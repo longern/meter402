@@ -1,5 +1,6 @@
 import { base64UrlRandom, makeId } from "./crypto";
 import { HttpError } from "./http";
+import { parseMoney } from "./money";
 
 export async function createApiKey(): Promise<{ id: string; secret: string; prefix: string; keySuffix: string }> {
   const id = makeId("key");
@@ -41,8 +42,26 @@ export function normalizeApiKeyExpiresAt(value: unknown): string | null {
   return date.toISOString();
 }
 
-export function keyStatus(revokedAt: string | null, expiresAt: string | null): string {
+export function normalizeApiKeySpendLimit(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  if (typeof value !== "string") {
+    throw new HttpError(400, "invalid_api_key_spend_limit", "API key spend limit must be a decimal amount.");
+  }
+  const limit = parseMoney(value);
+  if (limit <= 0) {
+    throw new HttpError(400, "invalid_api_key_spend_limit", "API key spend limit must be greater than zero.");
+  }
+  return limit;
+}
+
+export function keyStatus(
+  revokedAt: string | null,
+  expiresAt: string | null,
+  spendLimit: number | null = null,
+  spentAmount = 0,
+): string {
   if (revokedAt) return "revoked";
   if (expiresAt && Date.parse(expiresAt) <= Date.now()) return "expired";
+  if (spendLimit != null && spentAmount >= spendLimit) return "exhausted";
   return "active";
 }

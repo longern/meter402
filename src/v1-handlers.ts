@@ -605,6 +605,19 @@ async function startMeteredRequest(
       },
     );
   }
+  if (
+    account.api_key_spend_limit != null &&
+    account.api_key_spent_amount >= account.api_key_spend_limit
+  ) {
+    return paymentRequiredResponse(
+      "api_key_spend_limit_exceeded",
+      "This API key has reached its spend limit.",
+      {
+        spend_limit: formatMoney(account.api_key_spend_limit),
+        spent_amount: formatMoney(account.api_key_spent_amount),
+      },
+    );
+  }
 
   const gate = await claimAccountGate(
     env,
@@ -763,12 +776,13 @@ async function reconcileOneGatewayLog(
      SET status = 'reconciling'
      WHERE id = ?
        AND status = 'pending_reconcile'
-     RETURNING id, account_id, model, ai_gateway_log_id, input_tokens, output_tokens, total_tokens`,
+     RETURNING id, account_id, api_key_id, model, ai_gateway_log_id, input_tokens, output_tokens, total_tokens`,
   )
     .bind(requestId)
     .first<{
       id: string;
       account_id: string;
+      api_key_id: string | null;
       model: string | null;
       ai_gateway_log_id: string | null;
       input_tokens: number | null;
@@ -802,6 +816,7 @@ async function reconcileOneGatewayLog(
     await settleMeteredRequest(
       env,
       request.account_id,
+      request.api_key_id,
       request.id,
       request.model,
       usage,
@@ -836,6 +851,7 @@ async function restorePendingReconcile(
 async function settleMeteredRequest(
   env: Env,
   accountId: string,
+  apiKeyId: string | null,
   requestId: string,
   model: unknown,
   usage: Usage,
@@ -881,6 +897,7 @@ async function settleMeteredRequest(
       accountId,
     )
     .run();
+  await incrementApiKeySpend(env, apiKeyId, cost);
 
   // Step 2: 尝试自动支付
   const autoPay = await tryAutoPayInvoice(env, accountId, cost, requirement);
@@ -1016,6 +1033,21 @@ async function settleMeteredRequest(
         ? "autopay_recharge"
         : undefined,
   };
+}
+
+async function incrementApiKeySpend(
+  env: Env,
+  apiKeyId: string | null,
+  amount: number,
+): Promise<void> {
+  if (!apiKeyId || amount <= 0) return;
+  await env.DB.prepare(
+    `UPDATE meteria402_api_keys
+     SET spent_amount = spent_amount + ?
+     WHERE id = ?`,
+  )
+    .bind(amount, apiKeyId)
+    .run();
 }
 
 async function createPaidInvoiceFromExcessDeposit(

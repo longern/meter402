@@ -16,7 +16,7 @@ import {
   shortAddress,
   formatCompactNumber,
   formatMoneyCompact,
-  datetimeLocalToIso,
+  apiKeyDurationToIso,
   getConsoleView,
   consoleViewSubtitle,
 } from "./utils";
@@ -153,7 +153,8 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
   const [autopayUrl, setAutopayUrl] = useState(DEFAULT_AUTOPAY_URL);
   const [newApiKey, setNewApiKey] = useState("");
   const [newKeyName, setNewKeyName] = useState("");
-  const [newKeyExpiresAt, setNewKeyExpiresAt] = useState("");
+  const [newKeyDuration, setNewKeyDuration] = useState("1y");
+  const [newKeySpendLimit, setNewKeySpendLimit] = useState("");
   const [createKeyOpen, setCreateKeyOpen] = useState(false);
   const [keyDialogError, setKeyDialogError] = useState("");
   const [paymentDialog, setPaymentDialog] = useState(null);
@@ -450,7 +451,8 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
     setKeyDialogError("");
     setNewApiKey("");
     setNewKeyName("");
-    setNewKeyExpiresAt("");
+    setNewKeyDuration("1y");
+    setNewKeySpendLimit("");
   }
 
   function openEditEndpointDialog() {
@@ -485,14 +487,16 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
         method: "POST",
         body: JSON.stringify({
           name: newKeyName.trim() || undefined,
-          expires_at: datetimeLocalToIso(newKeyExpiresAt),
+          expires_at: apiKeyDurationToIso(newKeyDuration),
+          spend_limit: newKeySpendLimit.trim() || undefined,
         }),
       });
       if (json.api_key) {
         setNewApiKey(json.api_key);
       }
       setNewKeyName("");
-      setNewKeyExpiresAt("");
+      setNewKeyDuration("1y");
+      setNewKeySpendLimit("");
       const keysJson = await request("/api/api-keys");
       setApiKeys(keysJson.api_keys || []);
     } catch (error) {
@@ -864,8 +868,10 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
             createManagedApiKey={createManagedApiKey}
             newKeyName={newKeyName}
             setNewKeyName={setNewKeyName}
-            newKeyExpiresAt={newKeyExpiresAt}
-            setNewKeyExpiresAt={setNewKeyExpiresAt}
+            newKeyDuration={newKeyDuration}
+            setNewKeyDuration={setNewKeyDuration}
+            newKeySpendLimit={newKeySpendLimit}
+            setNewKeySpendLimit={setNewKeySpendLimit}
             newApiKey={newApiKey}
             keyDialogError={keyDialogError}
             formatCompactNumber={formatCompactNumber}

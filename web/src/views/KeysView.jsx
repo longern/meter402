@@ -5,6 +5,14 @@ import { RefreshIcon } from "../icons";
 import { formatDateTime } from "../utils";
 import { GATEWAY_PROVIDERS, providerUrl } from "../gatewayProviders";
 
+const API_KEY_DURATION_OPTIONS = [
+  { value: "30d", label: "30 days" },
+  { value: "90d", label: "90 days" },
+  { value: "1y", label: "1 year" },
+  { value: "10y", label: "10 years" },
+  { value: "never", label: "No expiration" },
+];
+
 function CopyIcon({ copied }) {
   if (copied) {
     return (
@@ -35,8 +43,10 @@ export default function KeysView({
   createManagedApiKey,
   newKeyName,
   setNewKeyName,
-  newKeyExpiresAt,
-  setNewKeyExpiresAt,
+  newKeyDuration,
+  setNewKeyDuration,
+  newKeySpendLimit,
+  setNewKeySpendLimit,
   newApiKey,
   keyDialogError,
   formatCompactNumber,
@@ -162,6 +172,12 @@ export default function KeysView({
                         <div className="label">Cost</div>
                       </div>
                       <div className="stat-box">
+                        <div className="num">
+                          {item.spend_limit == null ? "Unlimited" : formatMoneyCompact(item.spend_limit)}
+                        </div>
+                        <div className="label">Limit</div>
+                      </div>
+                      <div className="stat-box">
                         <div className="num">{item.calls > 0 ? Math.round(((item.calls - (item.errors || 0)) / item.calls) * 100) : 0}%</div>
                         <div className="label">Success</div>
                       </div>
@@ -170,7 +186,7 @@ export default function KeysView({
                 </div>
                 <button
                   className="secondary danger"
-                  disabled={isBusy || item.status !== "active"}
+                  disabled={isBusy || item.status === "revoked"}
                   onClick={() => revokeApiKey(item.id)}
                 >
                   Revoke
@@ -202,8 +218,23 @@ export default function KeysView({
                 <input value={newKeyName} placeholder="Auto-generated if empty" onChange={(event) => setNewKeyName(event.target.value)} />
               </label>
               <label>
-                <span>Expires</span>
-                <input type="datetime-local" value={newKeyExpiresAt} onChange={(event) => setNewKeyExpiresAt(event.target.value)} />
+                <span>Valid for</span>
+                <select value={newKeyDuration} onChange={(event) => setNewKeyDuration(event.target.value)}>
+                  {API_KEY_DURATION_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>Spend limit (USDC)</span>
+                <input
+                  value={newKeySpendLimit}
+                  inputMode="decimal"
+                  placeholder="Unlimited"
+                  onChange={(event) => setNewKeySpendLimit(event.target.value)}
+                />
               </label>
             </div>
             {keyDialogError && <p className="form-error">{keyDialogError}</p>}

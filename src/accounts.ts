@@ -22,7 +22,8 @@ export async function authenticate(
   const keyHash = await sha256Hex(apiKey);
   const account = await env.DB.prepare(
     `SELECT a.id, a.status, a.owner_address, a.autopay_url, a.deposit_balance, a.unpaid_invoice_total,
-            a.concurrency_limit, a.min_deposit_required, a.autopay_min_recharge_amount, a.refund_address, k.id AS api_key_id
+            a.concurrency_limit, a.min_deposit_required, a.autopay_min_recharge_amount, a.refund_address,
+            k.id AS api_key_id, k.spend_limit AS api_key_spend_limit, k.spent_amount AS api_key_spent_amount
      FROM meteria402_api_keys k
      JOIN meteria402_accounts a ON a.id = k.account_id
      WHERE k.key_hash = ?
@@ -54,6 +55,8 @@ export async function requireAccountFromSession(
   return {
     ...account,
     api_key_id: "",
+    api_key_spend_limit: null,
+    api_key_spent_amount: 0,
   };
 }
 

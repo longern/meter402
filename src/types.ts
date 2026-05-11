@@ -50,6 +50,8 @@ export type Account = {
 
 export type AuthenticatedAccount = Account & {
   api_key_id: string;
+  api_key_spend_limit: number | null;
+  api_key_spent_amount: number;
 };
 
 export type ChatBody = {

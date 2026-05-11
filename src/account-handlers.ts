@@ -4,6 +4,7 @@ import {
   keyStatus,
   normalizeApiKeyExpiresAt,
   normalizeApiKeyName,
+  normalizeApiKeySpendLimit,
 } from "./api-keys";
 import { verifyMessage, type Hex } from "viem";
 import { base64UrlRandom, sha256Hex } from "./crypto";
@@ -269,7 +270,7 @@ export async function handleListApiKeys(
   const account = await requireAccountFromSession(request, env);
 
   const rows = await env.DB.prepare(
-    `SELECT id, key_prefix, key_suffix, name, expires_at, created_at, revoked_at
+    `SELECT id, key_prefix, key_suffix, name, expires_at, spend_limit, spent_amount, created_at, revoked_at
      FROM meteria402_api_keys
      WHERE account_id = ?
      ORDER BY created_at DESC`,
@@ -281,6 +282,8 @@ export async function handleListApiKeys(
       key_suffix: string;
       name: string | null;
       expires_at: string | null;
+      spend_limit: number | null;
+      spent_amount: number;
       created_at: string;
       revoked_at: string | null;
     }>();
@@ -291,7 +294,7 @@ export async function handleListApiKeys(
   const keyIds = keyList.map((k) => k.id);
   const statsMap = new Map<
     string,
-    { calls: number; total_tokens: number; total_cost: number; errors: number }
+    { calls: number; total_tokens: number; errors: number }
   >();
 
   if (keyIds.length > 0) {
@@ -300,7 +303,6 @@ export async function handleListApiKeys(
       `SELECT api_key_id,
               COUNT(*) AS calls,
               COALESCE(SUM(total_tokens), 0) AS total_tokens,
-              COALESCE(SUM(final_cost), 0) AS total_cost,
               COUNT(CASE WHEN status = 'error' OR status = 'pending_reconcile' THEN 1 END) AS errors
        FROM meteria402_requests
        WHERE api_key_id IN (${placeholders})
@@ -311,7 +313,6 @@ export async function handleListApiKeys(
         api_key_id: string;
         calls: number;
         total_tokens: number;
-        total_cost: number;
         errors: number;
       }>();
 
@@ -319,7 +320,6 @@ export async function handleListApiKeys(
       statsMap.set(row.api_key_id, {
         calls: Number(row.calls),
         total_tokens: Number(row.total_tokens),
-        total_cost: Number(row.total_cost),
         errors: Number(row.errors),
       });
     }
@@ -330,7 +330,6 @@ export async function handleListApiKeys(
       const stats = statsMap.get(row.id) || {
         calls: 0,
         total_tokens: 0,
-        total_cost: 0,
         errors: 0,
       };
       return {
@@ -338,13 +337,15 @@ export async function handleListApiKeys(
         name: row.name || "Unnamed key",
         prefix: row.key_prefix,
         key_suffix: row.key_suffix,
-        status: keyStatus(row.revoked_at, row.expires_at),
+        status: keyStatus(row.revoked_at, row.expires_at, row.spend_limit, row.spent_amount),
         expires_at: row.expires_at,
+        spend_limit: row.spend_limit,
+        spent_amount: row.spent_amount,
         created_at: row.created_at,
         revoked_at: row.revoked_at,
         calls: stats.calls,
         total_tokens: stats.total_tokens,
-        total_cost: stats.total_cost,
+        total_cost: row.spent_amount,
         errors: stats.errors,
       };
     }),
@@ -360,13 +361,15 @@ export async function handleCreateApiKey(
   const body = await readOptionalJsonObject(request);
   const name = normalizeApiKeyName(body.name);
   const expiresAt = normalizeApiKeyExpiresAt(body.expires_at ?? body.expiresAt);
+  const spendLimit = normalizeApiKeySpendLimit(body.spend_limit ?? body.spendLimit);
   const apiKey = await createApiKey();
   const apiKeyHash = await sha256Hex(apiKey.secret);
   const now = new Date().toISOString();
 
   await env.DB.prepare(
-    `INSERT INTO meteria402_api_keys (id, account_id, key_hash, key_prefix, key_suffix, name, expires_at, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO meteria402_api_keys
+       (id, account_id, key_hash, key_prefix, key_suffix, name, expires_at, spend_limit, spent_amount, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
   )
     .bind(
       apiKey.id,
@@ -376,6 +379,7 @@ export async function handleCreateApiKey(
       apiKey.keySuffix,
       name,
       expiresAt,
+      spendLimit,
       now,
     )
     .run();
@@ -388,6 +392,8 @@ export async function handleCreateApiKey(
       prefix: apiKey.prefix,
       key_suffix: apiKey.keySuffix,
       expires_at: expiresAt,
+      spend_limit: spendLimit,
+      spent_amount: 0,
       created_at: now,
       message: "Store this API key now. It cannot be shown again.",
     },

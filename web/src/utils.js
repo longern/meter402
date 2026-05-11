@@ -49,9 +49,19 @@ export function formatMoneyCompact(microUsd) {
   return `$${usd.toFixed(6)}`;
 }
 
-export function datetimeLocalToIso(value) {
-  if (!value) return undefined;
-  const date = new Date(value);
+export function apiKeyDurationToIso(value) {
+  if (!value || value === "never") return undefined;
+  const match = /^(\d+)([dmy])$/.exec(value);
+  if (!match) return undefined;
+
+  const amount = Number(match[1]);
+  const unit = match[2];
+  const date = new Date();
+
+  if (unit === "d") date.setDate(date.getDate() + amount);
+  if (unit === "m") date.setMonth(date.getMonth() + amount);
+  if (unit === "y") date.setFullYear(date.getFullYear() + amount);
+
   return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
 }
 
