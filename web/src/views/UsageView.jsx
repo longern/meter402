@@ -1,4 +1,5 @@
 import CardSection from "../CardSection";
+import DataList, { DataListItem } from "../DataList";
 import { RefreshIcon } from "../icons";
 import { formatDateTime, shortId } from "../utils";
 
@@ -28,9 +29,9 @@ export default function UsageView({
         }
       >
         {requests.length ? (
-          <div className="data-list">
+          <DataList>
             {requests.map((item) => (
-              <div className="data-row" key={item.id}>
+              <DataListItem key={item.id}>
                 <div>
                   <strong>{item.model || "Unknown model"}</strong>
                   <span>
@@ -39,9 +40,9 @@ export default function UsageView({
                   </span>
                 </div>
                 <span className="mono">{shortId(item.id)}</span>
-              </div>
+              </DataListItem>
             ))}
-          </div>
+          </DataList>
         ) : (
           <p className="muted">No metered gateway requests yet.</p>
         )}
@@ -65,16 +66,16 @@ export default function UsageView({
           <button disabled={isBusy} className="primary" onClick={autopayInvoice}>Pay invoice</button>
         </div>
         {lastInvoices.length ? (
-          <div className="data-list">
+          <DataList>
             {lastInvoices.map((item) => (
-              <div className="data-row" key={item.id}>
+              <DataListItem key={item.id}>
                 <div>
                   <strong>{item.amount_due} {item.currency}</strong>
                   <span>{item.status} · {shortId(item.id)}</span>
                 </div>
-              </div>
+              </DataListItem>
             ))}
-          </div>
+          </DataList>
         ) : (
           <p className="muted">No unpaid usage charges yet.</p>
         )}

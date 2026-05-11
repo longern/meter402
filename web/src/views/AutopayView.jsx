@@ -1,6 +1,7 @@
 import { useState, useRef } from "react";
 import QRCode from "qrcode";
 import CardSection from "../CardSection";
+import DataList, { DataListItem } from "../DataList";
 import Modal from "../Modal";
 import { RefreshIcon } from "../icons";
 import {
@@ -55,9 +56,9 @@ export default function AutopayView({
         <p className="muted">Scoped autopay authorizations: amount limits, validity period, and remaining budget.</p>
 
         {capabilities.length ? (
-          <div className="data-list">
+          <DataList>
             {capabilities.map((item) => (
-              <div className={`data-row ${item.status}`} key={item.id}>
+              <DataListItem className={item.status} key={item.id}>
                 <div>
                   <strong>{item.total_budget} USDC limit</strong>
                   <span>
@@ -73,9 +74,9 @@ export default function AutopayView({
                 >
                   Revoke
                 </button>
-              </div>
+              </DataListItem>
             ))}
-          </div>
+          </DataList>
         ) : (
           <p className="muted">No autopay limits. Create one to enable scoped wallet pre-approval.</p>
         )}
@@ -86,7 +87,6 @@ export default function AutopayView({
           open={capCreateOpen}
           onClose={closeCapCreate}
           title="Create Autopay Limit"
-          subtitle="A pre-approval lets the worker pay invoices on your behalf within the set limit."
           titleId="create-cap-title"
         >
           <form onSubmit={createCapability}>
@@ -119,11 +119,6 @@ export default function AutopayView({
           open={!!capDialog}
           onClose={closeCapDialog}
           title={capDialog.status === "done" ? "Limit created" : "Approve limit"}
-          subtitle={
-            capDialog.status === "done"
-              ? "Your autopay limit has been saved and is now active."
-              : "Scan this QR code with your wallet app."
-          }
           className="payment-modal"
           titleId="cap-title"
         >

@@ -260,7 +260,6 @@ export default function RechargeView({
           open={!!paymentDialog}
           onClose={closePaymentDialog}
           title="Pay Deposit"
-          subtitle="Scan with your wallet app or open the link on this device."
           className="payment-modal"
           titleId="payment-title"
         >

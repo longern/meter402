@@ -1170,9 +1170,15 @@ textarea {
 
 .data-list {
   display: grid;
-  gap: 10px;
-  margin-top: -10px;
-  margin-bottom: -10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.data-list-divider {
+  display: block;
+  height: 1px;
+  background: #e5e7eb;
 }
 
 .data-row {
@@ -1181,11 +1187,6 @@ textarea {
   justify-content: space-between;
   gap: 14px;
   padding: 10px 0;
-  border-bottom: 1px solid #e5e7eb;
-}
-
-.data-row:last-child {
-  border-bottom: 0;
 }
 
 .data-row strong {
@@ -1248,6 +1249,30 @@ textarea {
 
 .api-key-table .actions {
   text-align: right;
+}
+
+.api-key-status-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #f3f4f6;
+  color: #4b5563;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  vertical-align: middle;
+}
+
+.api-key-status-chip.active {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.api-key-status-chip.disabled {
+  background: #fee2e2;
+  color: #991b1b;
 }
 
 .api-key-action-menu-shell {
@@ -1475,6 +1500,110 @@ textarea {
 
   .api-key-mobile-list {
     display: grid;
+    gap: 0;
+  }
+
+  .api-key-mobile-item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 24px;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 0;
+    border-bottom: 0;
+  }
+
+  .api-key-mobile-main {
+    min-width: 0;
+  }
+
+  .api-key-mobile-title-row,
+  .api-key-mobile-key-row,
+  .api-key-mobile-status-row {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+  }
+
+  .api-key-mobile-title-row {
+    gap: 8px;
+    justify-content: space-between;
+  }
+
+  .api-key-mobile-title-row strong {
+    min-width: 0;
+    margin-bottom: 0;
+    overflow: hidden;
+    color: #111827;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .api-key-mobile-title-row .api-key-mobile-cost {
+    flex: 0 0 auto;
+    color: #111827;
+    font-size: 17px;
+    font-weight: 800;
+    line-height: 1.1;
+    white-space: nowrap;
+  }
+
+  .api-key-mobile-key-row {
+    margin-top: 4px;
+    color: #64748b;
+    font-size: 13px;
+  }
+
+  .api-key-mobile-key-row span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .api-key-mobile-key-row span:first-child {
+    flex: 0 1 auto;
+    color: #475569;
+  }
+
+  .api-key-mobile-status-row span + span::before {
+    content: "·";
+    margin-right: 8px;
+    color: #94a3b8;
+  }
+
+  .api-key-mobile-status-row {
+    gap: 8px;
+    margin-top: 5px;
+    color: #64748b;
+    font-size: 12px;
+    font-weight: 650;
+  }
+
+  .api-key-mobile-status-row span {
+    color: inherit;
+    font-size: inherit;
+    white-space: nowrap;
+  }
+
+  .api-key-mobile-item .api-key-action-menu-shell {
+    justify-self: end;
+    align-self: start;
+  }
+
+  .api-key-mobile-item .api-key-action-button {
+    width: 24px;
+    height: 24px;
+    min-height: 24px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: #64748b;
+  }
+
+  .api-key-mobile-item .api-key-action-button:hover,
+  .api-key-mobile-item .api-key-action-button:focus-visible {
+    background: #f3f4f6;
+    color: #111827;
   }
 
   .usage-stats {
@@ -1523,7 +1652,6 @@ textarea {
   .feature-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-
 }
 
 @media (max-width: 720px) {
@@ -1816,6 +1944,7 @@ textarea {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
   padding: 0 16px;
   margin-top: 8px;
+  margin-bottom: 0;
 }
 
 .pay-deposit-summary .data-row {
@@ -1823,12 +1952,12 @@ textarea {
   justify-content: space-between;
   align-items: center;
   padding: 14px 0;
-  border-bottom: 1px solid #e5e7eb;
   font-size: 14px;
 }
 
-.pay-deposit-summary .data-row:last-child {
-  border-bottom: none;
+.pay-deposit-summary .data-list-divider {
+  margin: 0;
+  background: #e5e7eb;
 }
 
 .pay-deposit-summary .data-row strong {

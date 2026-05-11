@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import CardSection from "../CardSection";
+import DataList, { DataListItem } from "../DataList";
 import Modal from "../Modal";
 import { RefreshIcon } from "../icons";
 import { formatDateTime } from "../utils";
@@ -103,6 +104,14 @@ export default function KeysView({
   function handleApiKeyAction(action, id) {
     setOpenActionMenu("");
     action(id);
+  }
+
+  function renderApiKeyStatus(status) {
+    return (
+      <span className={`api-key-status-chip ${status}`}>
+        {status}
+      </span>
+    );
   }
 
   function renderApiKeyActionMenu(item) {
@@ -224,7 +233,7 @@ export default function KeysView({
                         <strong>{item.name || `${item.prefix}_...${item.key_suffix}`}</strong>
                       </td>
                       <td className="mono">{item.prefix}_...{item.key_suffix}</td>
-                      <td>{item.status}</td>
+                      <td>{renderApiKeyStatus(item.status)}</td>
                       <td>{item.expires_at ? formatDateTime(item.expires_at) : "Never"}</td>
                       <td className="numeric">{formatMoneyCompact(item.total_cost ?? 0)}</td>
                       <td className="numeric">{item.spend_limit == null ? "Unlimited" : formatMoneyCompact(item.spend_limit)}</td>
@@ -237,32 +246,29 @@ export default function KeysView({
               </table>
             </div>
 
-            <div className="data-list api-key-mobile-list">
+            <DataList className="api-key-mobile-list" dividerClassName="api-key-mobile-divider">
               {apiKeys.map((item) => (
-                <div className="data-row" key={item.id}>
-                  <div>
-                    <strong>{item.name || `${item.prefix}_...${item.key_suffix}`}</strong>
-                    <span>
-                      {item.prefix}_...{item.key_suffix} · {item.status}
-                      {item.expires_at ? ` · expires ${formatDateTime(item.expires_at)}` : ""}
-                    </span>
-                    <div className="usage-stats">
-                      <div className="stat-box">
-                        <div className="num">{formatMoneyCompact(item.total_cost ?? 0)}</div>
-                        <div className="label">Cost</div>
-                      </div>
-                      <div className="stat-box">
-                        <div className="num">
-                          {item.spend_limit == null ? "Unlimited" : formatMoneyCompact(item.spend_limit)}
-                        </div>
-                        <div className="label">Limit</div>
-                      </div>
+                <DataListItem className="api-key-mobile-item" key={item.id}>
+                  <div className="api-key-mobile-main">
+                    <div className="api-key-mobile-title-row">
+                      <strong>{item.name || `${item.prefix}_...${item.key_suffix}`}</strong>
+                      <span className="api-key-mobile-cost">{formatMoneyCompact(item.total_cost ?? 0)}</span>
+                    </div>
+                    <div className="api-key-mobile-key-row">
+                      <span className="mono">{item.prefix}_...{item.key_suffix}</span>
+                    </div>
+                    <div className="api-key-mobile-status-row">
+                      {renderApiKeyStatus(item.status)}
+                      <span>{item.expires_at ? `expires ${formatDateTime(item.expires_at)}` : "Never expires"}</span>
+                      {item.spend_limit != null && (
+                        <span>Limit {formatMoneyCompact(item.spend_limit)}</span>
+                      )}
                     </div>
                   </div>
                   {renderApiKeyActionMenu(item)}
-                </div>
+                </DataListItem>
               ))}
-            </div>
+            </DataList>
           </>
         ) : (
           <div className="empty-state">
@@ -278,7 +284,6 @@ export default function KeysView({
           open={createKeyOpen}
           onClose={closeCreateKeyDialog}
           title="Create API Key"
-          subtitle="The generated key is shown once."
           titleId="create-key-title"
         >
           <form onSubmit={createManagedApiKey}>

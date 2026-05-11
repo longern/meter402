@@ -2,7 +2,7 @@ import React from "react";
 import CardSection from "./CardSection";
 import styles from "./Modal.module.css";
 
-export default function Modal({ open, onClose, title, subtitle, className = "", children, titleId }) {
+export default function Modal({ open, onClose, title, className = "", children, titleId }) {
   if (!open) return null;
   const id = titleId || "modal-title";
   const panelClassName = className ? `${styles.panel} ${className}` : styles.panel;
@@ -23,7 +23,6 @@ export default function Modal({ open, onClose, title, subtitle, className = "", 
         contentClassName={styles.content}
         title={title}
         titleId={id}
-        subtitle={subtitle}
         actions={closeAction}
         role="dialog"
         aria-modal="true"

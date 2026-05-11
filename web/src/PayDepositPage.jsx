@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import CardSection from "./CardSection";
+import DataList, { DataListItem } from "./DataList";
 import { normalizeApiError } from "./apiError";
 
 function readableError(error) {
@@ -320,22 +321,22 @@ export default function PayDepositPage() {
       <main className="pay-deposit-main">
         {status === "ready" && (
           <CardSection title="Confirm Deposit">
-            <div className="pay-deposit-summary">
-              <div className="data-row">
+            <DataList className="pay-deposit-summary">
+              <DataListItem>
                 <span>Amount</span>
                 <strong>{amount} {currency}</strong>
-              </div>
-              <div className="data-row">
+              </DataListItem>
+              <DataListItem>
                 <span>Network</span>
                 <span>Base</span>
-              </div>
+              </DataListItem>
               {data?.accept?.asset && (
-                <div className="data-row">
+                <DataListItem>
                   <span>Token</span>
                   <span className="mono">{shortAddress(data.accept.asset)}</span>
-                </div>
+                </DataListItem>
               )}
-            </div>
+            </DataList>
 
             <p className="muted" style={{ marginTop: 16 }}>
               Click below to sign the payment authorization with your wallet.
@@ -392,16 +393,16 @@ export default function PayDepositPage() {
                 </div>
               )}
 
-              <div className="pay-deposit-summary" style={{ marginTop: 16 }}>
-                <div className="data-row">
+              <DataList className="pay-deposit-summary" style={{ marginTop: 16 }}>
+                <DataListItem>
                   <span>Account ID</span>
                   <span className="mono">{result.account_id}</span>
-                </div>
-                <div className="data-row">
+                </DataListItem>
+                <DataListItem>
                   <span>Deposit Balance</span>
                   <strong>{result.deposit_balance} {currency}</strong>
-                </div>
-              </div>
+                </DataListItem>
+              </DataList>
             </div>
 
             <div className="pay-deposit-actions" style={{ marginTop: 24 }}>

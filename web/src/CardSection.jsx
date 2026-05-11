@@ -3,7 +3,6 @@ import styles from "./CardSection.module.css";
 export default function CardSection({
   title,
   titleId,
-  subtitle,
   actions,
   children,
   className = "",
@@ -23,7 +22,6 @@ export default function CardSection({
       <div className={styles.header}>
         <div>
           <h2 className={styles.title} id={titleId}>{title}</h2>
-          {subtitle && <p className={styles.subtitle}>{subtitle}</p>}
         </div>
         {actions && <div className={styles.actions}>{actions}</div>}
       </div>
