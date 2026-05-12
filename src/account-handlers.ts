@@ -29,6 +29,30 @@ import { reconcilePendingGatewayLogs } from "./v1-handlers";
 const OWNER_REBIND_TTL_SECONDS = 5 * 60;
 const OWNER_REBIND_STATEMENT = "Confirm Meteria402 main wallet rebinding.";
 const OWNER_REBIND_RESOURCE_PREFIX = "urn:meteria402:owner-rebind:";
+const REQUESTS_PAGE_SIZE = 25;
+
+type RequestCursor = {
+  startedAt: string;
+  id: string;
+};
+
+type RequestRow = {
+  id: string;
+  status: string;
+  model: string | null;
+  stream: number;
+  ai_gateway_log_id: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  total_tokens: number | null;
+  final_cost: number | null;
+  error_code: string | null;
+  started_at: string;
+  completed_at: string | null;
+  invoice_id: string | null;
+  invoice_status: string | null;
+  invoice_amount_due: number | null;
+};
 
 export async function handleGetAccount(
   request: Request,
@@ -536,39 +560,45 @@ export async function handleListRequests(
   env: Env,
 ): Promise<Response> {
   const account = await requireAccountFromSession(request, env);
+  const url = new URL(request.url);
+  const cursor = decodeRequestsCursor(url.searchParams.get("cursor"));
+  const limit = REQUESTS_PAGE_SIZE + 1;
 
-  const rows = await env.DB.prepare(
-    `SELECT r.id, r.status, r.model, r.stream, r.ai_gateway_log_id,
-            r.input_tokens, r.output_tokens, r.total_tokens, r.final_cost,
-            r.error_code, r.started_at, r.completed_at,
-            i.id AS invoice_id, i.status AS invoice_status, i.amount_due AS invoice_amount_due
-     FROM meteria402_requests r
-     LEFT JOIN meteria402_invoices i ON i.request_id = r.id
-     WHERE r.account_id = ?
-     ORDER BY r.started_at DESC
-     LIMIT 100`,
-  )
-    .bind(account.id)
-    .all<{
-      id: string;
-      status: string;
-      model: string | null;
-      stream: number;
-      ai_gateway_log_id: string | null;
-      input_tokens: number | null;
-      output_tokens: number | null;
-      total_tokens: number | null;
-      final_cost: number | null;
-      error_code: string | null;
-      started_at: string;
-      completed_at: string | null;
-      invoice_id: string | null;
-      invoice_status: string | null;
-      invoice_amount_due: number | null;
-    }>();
+  const rows = cursor
+    ? await env.DB.prepare(
+        `SELECT r.id, r.status, r.model, r.stream, r.ai_gateway_log_id,
+                r.input_tokens, r.output_tokens, r.total_tokens, r.final_cost,
+                r.error_code, r.started_at, r.completed_at,
+                i.id AS invoice_id, i.status AS invoice_status, i.amount_due AS invoice_amount_due
+         FROM meteria402_requests r
+         LEFT JOIN meteria402_invoices i ON i.request_id = r.id
+         WHERE r.account_id = ?
+           AND (r.started_at < ? OR (r.started_at = ? AND r.id < ?))
+         ORDER BY r.started_at DESC, r.id DESC
+         LIMIT ?`,
+      )
+        .bind(account.id, cursor.startedAt, cursor.startedAt, cursor.id, limit)
+        .all<RequestRow>()
+    : await env.DB.prepare(
+        `SELECT r.id, r.status, r.model, r.stream, r.ai_gateway_log_id,
+                r.input_tokens, r.output_tokens, r.total_tokens, r.final_cost,
+                r.error_code, r.started_at, r.completed_at,
+                i.id AS invoice_id, i.status AS invoice_status, i.amount_due AS invoice_amount_due
+         FROM meteria402_requests r
+         LEFT JOIN meteria402_invoices i ON i.request_id = r.id
+         WHERE r.account_id = ?
+         ORDER BY r.started_at DESC, r.id DESC
+         LIMIT ?`,
+      )
+        .bind(account.id, limit)
+        .all<RequestRow>();
+
+  const pageRows = rows.results.slice(0, REQUESTS_PAGE_SIZE);
+  const hasMore = rows.results.length > REQUESTS_PAGE_SIZE;
+  const lastRow = pageRows.at(-1);
 
   return jsonResponse({
-    requests: rows.results.map((row) => ({
+    requests: pageRows.map((row) => ({
       id: row.id,
       status: row.status,
       model: row.model,
@@ -592,7 +622,32 @@ export async function handleListRequests(
           }
         : null,
     })),
+    page_size: REQUESTS_PAGE_SIZE,
+    next_cursor: hasMore && lastRow ? encodeRequestsCursor(lastRow) : null,
   });
+}
+
+function encodeRequestsCursor(row: Pick<RequestRow, "started_at" | "id">): string {
+  const raw = JSON.stringify({ startedAt: row.started_at, id: row.id });
+  return btoa(raw).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function decodeRequestsCursor(value: string | null): RequestCursor | null {
+  if (!value) return null;
+  try {
+    const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
+    const parsed = JSON.parse(atob(padded)) as Partial<RequestCursor>;
+    if (typeof parsed.startedAt !== "string" || typeof parsed.id !== "string") {
+      throw new Error("Invalid cursor");
+    }
+    return {
+      startedAt: parsed.startedAt,
+      id: parsed.id,
+    };
+  } catch {
+    throw new HttpError(400, "invalid_cursor", "Request cursor is invalid.");
+  }
 }
 
 export async function handleReconcileRequests(

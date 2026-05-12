@@ -78,6 +78,9 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
   const [deposits, setDeposits] = useState([]);
   const [depositsLoading, setDepositsLoading] = useState(false);
   const [requests, setRequests] = useState([]);
+  const [requestsCursor, setRequestsCursor] = useState(null);
+  const [requestsPrevCursors, setRequestsPrevCursors] = useState([]);
+  const [requestsNextCursor, setRequestsNextCursor] = useState(null);
   const [output, setOutput] = useState("");
   const [busy, setBusy] = useState("");
 
@@ -318,6 +321,9 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
         setDeposits([]);
         setApiKeys([]);
         setRequests([]);
+        setRequestsCursor(null);
+        setRequestsPrevCursors([]);
+        setRequestsNextCursor(null);
         setLastInvoices([]);
         setCapabilities([]);
         setAutopayWalletBalance(null);
@@ -458,12 +464,30 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
     }
   }
 
-  async function loadRequests() {
+  async function loadRequests(cursor = null, prevCursors = []) {
     await withBusy("loadRequests", async () => {
-      const json = await request("/api/requests");
+      const url = cursor
+        ? `/api/requests?cursor=${encodeURIComponent(cursor)}`
+        : "/api/requests";
+      const json = await request(url);
       setRequests(json.requests || []);
+      setRequestsCursor(cursor);
+      setRequestsPrevCursors(prevCursors);
+      setRequestsNextCursor(json.next_cursor || null);
       show(json);
     });
+  }
+
+  function loadPreviousRequestsPage() {
+    if (!requestsPrevCursors.length) return;
+    const nextPrevCursors = requestsPrevCursors.slice(0, -1);
+    const previousCursor = requestsPrevCursors[requestsPrevCursors.length - 1];
+    loadRequests(previousCursor, nextPrevCursors);
+  }
+
+  function loadNextRequestsPage() {
+    if (!requestsNextCursor) return;
+    loadRequests(requestsNextCursor, [...requestsPrevCursors, requestsCursor]);
   }
 
   async function autopayInvoice() {
@@ -813,6 +837,11 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
             isBusy={isBusy}
             busy={busy}
             loadRequests={loadRequests}
+            loadPreviousRequestsPage={loadPreviousRequestsPage}
+            loadNextRequestsPage={loadNextRequestsPage}
+            requestsPage={requestsPrevCursors.length + 1}
+            hasPreviousRequestsPage={requestsPrevCursors.length > 0}
+            hasNextRequestsPage={Boolean(requestsNextCursor)}
             loadInvoices={loadInvoices}
             autopayInvoice={autopayInvoice}
           />

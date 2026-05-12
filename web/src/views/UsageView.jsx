@@ -1,6 +1,6 @@
 import CardSection from "../CardSection";
 import DataList, { DataListItem } from "../DataList";
-import { RefreshIcon } from "../icons";
+import { ChevronIcon, RefreshIcon } from "../icons";
 import { formatDateTime, shortId } from "../utils";
 
 export default function UsageView({
@@ -9,6 +9,11 @@ export default function UsageView({
   isBusy,
   busy,
   loadRequests,
+  loadPreviousRequestsPage,
+  loadNextRequestsPage,
+  requestsPage,
+  hasPreviousRequestsPage,
+  hasNextRequestsPage,
   loadInvoices,
   autopayInvoice,
 }) {
@@ -22,7 +27,7 @@ export default function UsageView({
             type="button"
             aria-label="Refresh model calls"
             disabled={busy === "loadRequests"}
-            onClick={loadRequests}
+            onClick={() => loadRequests()}
           >
             <RefreshIcon />
           </button>
@@ -46,6 +51,27 @@ export default function UsageView({
         ) : (
           <p className="muted">No metered gateway requests yet.</p>
         )}
+        <div className="pagination-row" aria-label="Model calls pagination">
+          <button
+            type="button"
+            className="pagination-icon-button"
+            aria-label="Previous page"
+            disabled={busy === "loadRequests" || !hasPreviousRequestsPage}
+            onClick={loadPreviousRequestsPage}
+          >
+            <ChevronIcon direction="left" />
+          </button>
+          <span>Page {requestsPage}</span>
+          <button
+            type="button"
+            className="pagination-icon-button"
+            aria-label="Next page"
+            disabled={busy === "loadRequests" || !hasNextRequestsPage}
+            onClick={loadNextRequestsPage}
+          >
+            <ChevronIcon direction="right" />
+          </button>
+        </div>
       </CardSection>
 
       <CardSection

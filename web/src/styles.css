@@ -895,6 +895,46 @@ textarea {
   margin-block: 16px 12px;
 }
 
+.pagination-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-block: 14px 0;
+}
+
+.pagination-row span {
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.pagination-icon-button {
+  width: 32px;
+  height: 32px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  background: transparent;
+  color: #374151;
+}
+
+.pagination-icon-button svg {
+  width: 18px;
+  height: 18px;
+}
+
+.pagination-icon-button:hover:not(:disabled),
+.pagination-icon-button:focus-visible {
+  background: #e5e7eb;
+  color: #111827;
+}
+
+.pagination-icon-button:disabled {
+  color: #cbd5e1;
+  cursor: default;
+}
+
 .output {
   min-height: 72px;
 }
