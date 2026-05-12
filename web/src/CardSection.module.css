@@ -36,5 +36,21 @@
 }
 
 .content {
-  padding: 16px;
+  display: flow-root;
+  padding-inline: 16px;
+}
+
+.content > :first-child {
+  margin-block-start: 16px;
+}
+
+.content > :last-child {
+  margin-block-end: 16px;
+}
+
+.content > :global(.data-list),
+.content > :global(.api-key-table-wrap),
+.content > :global(.autopay-table-wrap),
+.content > :global(.deposit-table-wrap) {
+  margin-block: 4px;
 }

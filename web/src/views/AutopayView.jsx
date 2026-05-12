@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import QRCode from "qrcode";
 import CardSection from "../CardSection";
 import DataList, { DataListItem } from "../DataList";
@@ -33,6 +33,74 @@ export default function AutopayView({
   capApprovalCopied,
   copyCapApprovalLink,
 }) {
+  const [openCapabilityActionMenu, setOpenCapabilityActionMenu] = useState("");
+
+  useEffect(() => {
+    function closeActionMenu(event) {
+      if (event.target.closest?.(".capability-action-menu-shell")) return;
+      setOpenCapabilityActionMenu("");
+    }
+
+    function closeActionMenuOnEscape(event) {
+      if (event.key === "Escape") setOpenCapabilityActionMenu("");
+    }
+
+    document.addEventListener("click", closeActionMenu);
+    document.addEventListener("keydown", closeActionMenuOnEscape);
+
+    return () => {
+      document.removeEventListener("click", closeActionMenu);
+      document.removeEventListener("keydown", closeActionMenuOnEscape);
+    };
+  }, []);
+
+  function handleCapabilityAction(action, id) {
+    setOpenCapabilityActionMenu("");
+    action(id);
+  }
+
+  function renderCapabilityStatus(status) {
+    return (
+      <span className={`status-chip ${status}`}>
+        {status}
+      </span>
+    );
+  }
+
+  function renderCapabilityActionMenu(item) {
+    return (
+      <div className="api-key-action-menu-shell capability-action-menu-shell">
+        <button
+          className="icon-button plain api-key-action-button capability-action-button"
+          type="button"
+          aria-label={`Open actions for pre-approval ${shortAddress(item.owner_address)}`}
+          aria-expanded={openCapabilityActionMenu === item.id}
+          disabled={isBusy}
+          onClick={() => setOpenCapabilityActionMenu((current) => current === item.id ? "" : item.id)}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="5" cy="12" r="1.7" />
+            <circle cx="12" cy="12" r="1.7" />
+            <circle cx="19" cy="12" r="1.7" />
+          </svg>
+        </button>
+        {openCapabilityActionMenu === item.id && (
+          <div className="api-key-action-menu capability-action-menu" role="menu">
+            <button
+              type="button"
+              role="menuitem"
+              className="danger"
+              disabled={item.status === "revoked"}
+              onClick={() => handleCapabilityAction(revokeCapability, item.id)}
+            >
+              Revoke
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <>
       <CardSection
@@ -50,33 +118,66 @@ export default function AutopayView({
           </button>
         }
       >
-        <div style={{ marginBottom: 12 }}>
+        <div className="card-action-row">
           <button disabled={isBusy} className="primary" onClick={openCapCreate}>Create limit</button>
         </div>
         <p className="muted">Scoped autopay authorizations: amount limits, validity period, and remaining budget.</p>
 
         {capabilities.length ? (
-          <DataList>
-            {capabilities.map((item) => (
-              <DataListItem className={item.status} key={item.id}>
-                <div>
-                  <strong>{item.total_budget} USDC limit</strong>
-                  <span>
-                    {item.status} · {item.remaining_budget} remaining · max {item.max_single_amount}/tx
-                    {item.valid_before ? ` · expires ${formatDateTime(item.valid_before)}` : ""}
-                  </span>
-                  <span className="mono">{shortAddress(item.owner_address)}</span>
-                </div>
-                <button
-                  className="secondary danger"
-                  disabled={isBusy || item.status === "revoked"}
-                  onClick={() => revokeCapability(item.id)}
-                >
-                  Revoke
-                </button>
-              </DataListItem>
-            ))}
-          </DataList>
+          <>
+            <div className="autopay-table-wrap">
+              <table className="data-table autopay-table">
+                <thead>
+                  <tr>
+                    <th>Limit</th>
+                    <th className="numeric">Remaining</th>
+                    <th className="numeric">Max / tx</th>
+                    <th>Status</th>
+                    <th>Expires</th>
+                    <th>Wallet</th>
+                    <th className="actions">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {capabilities.map((item) => (
+                    <tr key={item.id}>
+                      <td><strong>{item.total_budget} USDC</strong></td>
+                      <td className="numeric">{item.remaining_budget} USDC</td>
+                      <td className="numeric">{item.max_single_amount} USDC</td>
+                      <td>{renderCapabilityStatus(item.status)}</td>
+                      <td>{item.valid_before ? formatDateTime(item.valid_before) : "Never"}</td>
+                      <td className="mono">{shortAddress(item.owner_address)}</td>
+                      <td className="actions">
+                        {renderCapabilityActionMenu(item)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <DataList className="autopay-mobile-list">
+              {capabilities.map((item) => (
+                <DataListItem className="autopay-mobile-item" key={item.id}>
+                  <div className="autopay-mobile-main">
+                    <div className="autopay-mobile-title-row">
+                      <strong>{item.total_budget} USDC limit</strong>
+                      <span className="autopay-mobile-remaining">{item.remaining_budget} left</span>
+                    </div>
+                    <div className="autopay-mobile-meta-row">
+                      <span>max {item.max_single_amount}/tx</span>
+                      <span className="mono">{shortAddress(item.owner_address)}</span>
+                    </div>
+                    <div className="autopay-mobile-status-row">
+                      {renderCapabilityStatus(item.status)}
+                      <span>{item.valid_before ? `expires ${formatDateTime(item.valid_before)}` : "Never expires"}</span>
+                    </div>
+                  </div>
+                  {renderCapabilityActionMenu(item)}
+                </DataListItem>
+              ))}
+            </DataList>
+          </>
         ) : (
           <p className="muted">No autopay limits. Create one to enable scoped wallet pre-approval.</p>
         )}

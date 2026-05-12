@@ -235,6 +235,11 @@ button.danger {
   color: #991b1b;
 }
 
+button.compact {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
 button:disabled {
   opacity: 0.55;
   cursor: not-allowed;
@@ -392,6 +397,7 @@ button:disabled {
   position: sticky;
   top: 0;
   height: 100vh;
+  height: 100dvh;
   box-sizing: border-box;
   padding: 24px 18px;
   background: #fff;
@@ -713,6 +719,7 @@ button:disabled {
   display: grid;
   gap: 12px;
   max-width: 720px;
+  margin-block: 16px;
 }
 
 .endpoint-picker label {
@@ -860,6 +867,10 @@ textarea {
   margin-top: 12px;
 }
 
+.dialog-form {
+  margin-block: 16px;
+}
+
 .dialog-actions {
   display: flex;
   flex-wrap: wrap;
@@ -880,6 +891,10 @@ textarea {
   margin-top: 12px;
 }
 
+.card-action-row {
+  margin-block: 16px 12px;
+}
+
 .output {
   min-height: 72px;
 }
@@ -887,7 +902,7 @@ textarea {
 .muted {
   color: #6b7280;
   font-size: 13px;
-  margin-bottom: 0;
+  margin: 16px 0;
 }
 
 .key-status {
@@ -909,7 +924,7 @@ textarea {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
   gap: 8px 14px;
-  padding: 4px 0;
+  margin-block: 16px;
 }
 
 .balance-panel .balance-label {
@@ -934,6 +949,7 @@ textarea {
 
 .settings-owner-panel {
   min-width: 0;
+  margin-block: 16px;
 }
 
 .settings-field-label {
@@ -1025,7 +1041,7 @@ textarea {
 }
 
 .empty-state {
-  margin-top: 14px;
+  margin-block: 16px;
   padding: 8px 0;
 }
 
@@ -1096,7 +1112,7 @@ textarea {
   gap: 18px;
   align-items: start;
   justify-content: center;
-  margin-top: 12px;
+  margin-block: 16px;
 }
 
 .payment-qr-panel img,
@@ -1195,7 +1211,7 @@ textarea {
   font-size: 14px;
 }
 
-.data-row span {
+.data-row > span {
   color: #64748b;
   font-size: 13px;
 }
@@ -1208,10 +1224,21 @@ textarea {
   display: none;
 }
 
-.api-key-table-wrap {
-  overflow: visible;
+.api-key-table-wrap,
+.autopay-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
 }
 
+.deposit-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
+  scrollbar-gutter: stable;
+}
+
+.data-table,
 .api-key-table {
   width: 100%;
   min-width: 680px;
@@ -1219,6 +1246,30 @@ textarea {
   font-size: 13px;
 }
 
+.autopay-table {
+  min-width: 760px;
+}
+
+.deposit-table {
+  min-width: 700px;
+}
+
+.deposit-table th:first-child,
+.deposit-table td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  min-width: 132px;
+  background: #fff;
+  box-shadow: 1px 0 0 #e5e7eb;
+}
+
+.deposit-table th:first-child {
+  z-index: 2;
+}
+
+.data-table th,
+.data-table td,
 .api-key-table th,
 .api-key-table td {
   padding: 10px 8px;
@@ -1229,28 +1280,34 @@ textarea {
   white-space: nowrap;
 }
 
+.data-table th,
 .api-key-table th {
   color: #64748b;
   font-weight: 700;
 }
 
+.data-table tbody tr:last-child td,
 .api-key-table tbody tr:last-child td {
   border-bottom: 0;
 }
 
+.data-table strong,
 .api-key-table strong {
   color: #111827;
   font-size: 14px;
 }
 
+.data-table .numeric,
 .api-key-table .numeric {
   text-align: right;
 }
 
+.data-table .actions,
 .api-key-table .actions {
   text-align: right;
 }
 
+.status-chip,
 .api-key-status-chip {
   display: inline-flex;
   align-items: center;
@@ -1265,14 +1322,52 @@ textarea {
   vertical-align: middle;
 }
 
+.status-chip.active,
 .api-key-status-chip.active {
   background: #dcfce7;
   color: #166534;
 }
 
+.status-chip.disabled,
+.status-chip.revoked,
 .api-key-status-chip.disabled {
   background: #fee2e2;
   color: #991b1b;
+}
+
+.status-chip.expired {
+  background: #f3f4f6;
+  color: #4b5563;
+}
+
+.status-chip.depleted {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.status-chip.settled {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.status-chip.pending {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.status-chip.failed {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.status-chip.verification_failed {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.autopay-mobile-list,
+.deposit-mobile-list {
+  display: none;
 }
 
 .api-key-action-menu-shell {
@@ -1298,6 +1393,8 @@ textarea {
   border-radius: 6px;
   background: #fff;
   box-shadow: 0 14px 34px rgba(15, 23, 42, 0.14);
+  transform-origin: top right;
+  animation: action-menu-pop 140ms ease-out;
 }
 
 .api-key-action-menu button {
@@ -1322,146 +1419,62 @@ textarea {
   color: #991b1b;
 }
 
-.deposit-list {
-  display: grid;
-  margin-top: -12px;
-  margin-bottom: -12px;
+@keyframes action-menu-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
-.deposit-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  padding: 12px 0;
-  border-bottom: 1px solid #e5e7eb;
-}
-
-.deposit-item:last-child {
-  border-bottom: none;
-}
-
-.deposit-left {
-  display: grid;
-  gap: 8px;
-  flex: 1;
-  min-width: 0;
-}
-
-.deposit-top {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+@media (prefers-reduced-motion: reduce) {
+  .api-key-action-menu {
+    animation: none;
+  }
 }
 
 .deposit-coin-icon {
   width: 36px;
   height: 36px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #2775ca, #1a5fa8);
+  background: #64748b;
   color: #fff;
   font-weight: 800;
-  font-size: 14px;
+  font-size: 18px;
+  letter-spacing: 0;
   display: grid;
   place-items: center;
   flex-shrink: 0;
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.2);
 }
 
-.deposit-main {
+img.deposit-coin-icon {
+  display: block;
+  background: transparent;
+  box-shadow: none;
+}
+
+.deposit-history-loading {
   display: grid;
-  gap: 2px;
-  flex: 1;
-  min-width: 0;
+  min-height: 96px;
+  place-items: center;
+  margin-block: 16px;
 }
 
-.deposit-amount {
-  font-size: 15px;
-  font-weight: 700;
-  color: #111827;
-}
-
-.deposit-status {
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: capitalize;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.deposit-status::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  display: inline-block;
-}
-
-.deposit-status.settled::before {
-  background: #10b981;
-}
-.deposit-status.settled {
-  color: #059669;
-}
-
-.deposit-status.pending::before {
-  background: #f59e0b;
-}
-.deposit-status.pending {
-  color: #d97706;
-}
-
-.deposit-status.failed::before {
-  background: #ef4444;
-}
-.deposit-status.failed {
-  color: #dc2626;
-}
-
-.deposit-bottom {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: #6b7280;
-}
-
-.deposit-network {
-  background: #f3f4f6;
-  color: #374151;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 2px 8px;
-  border-radius: 4px;
-}
-
-.deposit-address {
-  font-family: ui-monospace, monospace;
-  overflow-wrap: break-word;
-  word-break: break-all;
-}
-
-.deposit-right {
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
-}
-
-.deposit-time {
-  font-size: 12px;
-  color: #6b7280;
-  flex-shrink: 0;
-  align-self: center;
-}
-
-.deposit-right .icon-button.open-link {
+.deposit-table .icon-button.open-link,
+.deposit-mobile-item .icon-button.open-link {
   border: none;
   background: transparent;
   color: #9ca3af;
   padding: 4px;
 }
 
-.deposit-right .icon-button.open-link:hover {
+.deposit-table .icon-button.open-link:hover,
+.deposit-mobile-item .icon-button.open-link:hover {
   color: #4b5563;
 }
 
@@ -1494,11 +1507,15 @@ textarea {
 }
 
 @media (max-width: 720px) {
-  .api-key-table-wrap {
+  .api-key-table-wrap,
+  .autopay-table-wrap,
+  .deposit-table-wrap {
     display: none;
   }
 
-  .api-key-mobile-list {
+  .api-key-mobile-list,
+  .autopay-mobile-list,
+  .deposit-mobile-list {
     display: grid;
     gap: 0;
   }
@@ -1576,7 +1593,7 @@ textarea {
     margin-top: 5px;
     color: #64748b;
     font-size: 12px;
-    font-weight: 650;
+    font-weight: 500;
   }
 
   .api-key-mobile-status-row span {
@@ -1606,6 +1623,201 @@ textarea {
     color: #111827;
   }
 
+  .autopay-mobile-item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 0;
+  }
+
+  .autopay-mobile-main {
+    min-width: 0;
+  }
+
+  .autopay-mobile-title-row,
+  .autopay-mobile-meta-row,
+  .autopay-mobile-status-row {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+  }
+
+  .autopay-mobile-title-row {
+    gap: 8px;
+    justify-content: space-between;
+  }
+
+  .autopay-mobile-title-row strong {
+    min-width: 0;
+    margin-bottom: 0;
+    overflow: hidden;
+    color: #111827;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .autopay-mobile-remaining {
+    flex: 0 0 auto;
+    color: #111827;
+    font-size: 15px;
+    font-weight: 800;
+    line-height: 1.15;
+    white-space: nowrap;
+  }
+
+  .autopay-mobile-meta-row,
+  .autopay-mobile-status-row {
+    gap: 8px;
+    margin-top: 5px;
+    color: #64748b;
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  .autopay-mobile-meta-row span,
+  .autopay-mobile-status-row span {
+    min-width: 0;
+    color: inherit;
+    font-size: inherit;
+    white-space: nowrap;
+  }
+
+  .autopay-mobile-meta-row .mono {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .autopay-mobile-meta-row span + span::before,
+  .autopay-mobile-status-row span + span::before {
+    content: "·";
+    margin-right: 8px;
+    color: #94a3b8;
+  }
+
+  .autopay-mobile-item .api-key-action-menu-shell {
+    align-self: start;
+    justify-self: end;
+  }
+
+  .autopay-mobile-item .api-key-action-button {
+    width: 24px;
+    height: 24px;
+    min-height: 24px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: #64748b;
+  }
+
+  .autopay-mobile-item .api-key-action-button:hover,
+  .autopay-mobile-item .api-key-action-button:focus-visible {
+    background: #f3f4f6;
+    color: #111827;
+  }
+
+  .deposit-mobile-item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: stretch;
+    gap: 8px;
+    padding: 12px 0;
+  }
+
+  .deposit-mobile-main {
+    display: flex;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .deposit-mobile-meta-row,
+  .deposit-mobile-status-row,
+  .deposit-mobile-time-row {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+  }
+
+  .deposit-mobile-main .deposit-coin-icon {
+    flex: 0 0 auto;
+  }
+
+  .deposit-mobile-info {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .deposit-mobile-side {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    align-items: end;
+    justify-items: end;
+    min-height: 42px;
+  }
+
+  .deposit-mobile-amount {
+    display: grid;
+    justify-items: end;
+    gap: 2px;
+    color: #111827;
+    font-size: 1rem;
+    font-weight: 800;
+    line-height: 1.15;
+    white-space: nowrap;
+  }
+
+  .deposit-mobile-amount span {
+    color: inherit;
+    font-size: inherit;
+    font-weight: inherit;
+    line-height: inherit;
+  }
+
+  .deposit-mobile-amount span + span {
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .deposit-mobile-meta-row,
+  .deposit-mobile-status-row,
+  .deposit-mobile-time-row {
+    gap: 8px;
+    color: #64748b;
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  .deposit-mobile-status-row {
+    margin-top: 5px;
+  }
+
+  .deposit-mobile-time-row {
+    margin-top: 5px;
+  }
+
+  .deposit-mobile-meta-row span,
+  .deposit-mobile-status-row span {
+    min-width: 0;
+    color: inherit;
+    font-size: inherit;
+    white-space: nowrap;
+  }
+
+  .deposit-mobile-meta-row .mono {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .deposit-mobile-side > .icon-button.open-link {
+    justify-self: end;
+    width: 24px;
+    height: 24px;
+    min-height: 24px;
+    padding: 0;
+  }
+
   .usage-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1615,7 +1827,7 @@ textarea {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
-  margin: 16px 0 0;
+  margin-block: 16px;
 }
 
 .summary-grid dt,

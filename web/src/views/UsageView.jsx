@@ -62,7 +62,7 @@ export default function UsageView({
           </button>
         }
       >
-        <div style={{ marginBottom: 12 }}>
+        <div className="card-action-row">
           <button disabled={isBusy} className="primary" onClick={autopayInvoice}>Pay invoice</button>
         </div>
         {lastInvoices.length ? (

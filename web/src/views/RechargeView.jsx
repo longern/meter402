@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import CardSection from "../CardSection";
+import DataList, { DataListItem } from "../DataList";
 import Modal from "../Modal";
 import DepositDialog from "../DepositDialog";
 import { RefreshIcon } from "../icons";
@@ -8,6 +9,7 @@ import { formatDateTime, shortAddress } from "../utils";
 export default function RechargeView({
   account,
   deposits,
+  depositsLoading,
   identity,
   autopayWalletBalance,
   autopayWalletBalanceError,
@@ -35,6 +37,19 @@ export default function RechargeView({
 }) {
   const autopayEndpoint = account?.autopay_url || "";
   const [addressCopied, setAddressCopied] = useState(false);
+  const depositTableRef = useRef(null);
+
+  useEffect(() => {
+    if (depositsLoading || !deposits.length) return;
+
+    const scrollFrame = window.requestAnimationFrame(() => {
+      const tableWrap = depositTableRef.current;
+      if (!tableWrap) return;
+      tableWrap.scrollLeft = tableWrap.scrollWidth - tableWrap.clientWidth;
+    });
+
+    return () => window.cancelAnimationFrame(scrollFrame);
+  }, [deposits.length, depositsLoading]);
 
   async function copyAddress() {
     const addr = autopayWalletBalance?.address;
@@ -46,6 +61,52 @@ export default function RechargeView({
     } catch {
       setAddressCopied(false);
     }
+  }
+
+  function renderDepositStatus(status) {
+    return (
+      <span className={`status-chip ${status}`}>
+        {status}
+      </span>
+    );
+  }
+
+  function renderCurrencyIcon(currency) {
+    const normalized = currency?.toUpperCase();
+    if (normalized === "USDC") {
+      return (
+        <img
+          className="deposit-coin-icon"
+          src="/usdc.svg"
+          alt=""
+          aria-hidden="true"
+        />
+      );
+    }
+
+    return (
+      <div className="deposit-coin-icon" aria-label={normalized || "Currency"}>
+        {normalized?.slice(0, 1) || "?"}
+      </div>
+    );
+  }
+
+  function renderDepositExplorerLink(item) {
+    if (!item.tx_hash) return null;
+
+    return (
+      <a
+        className="icon-button open-link"
+        href={`https://basescan.org/tx/${item.tx_hash}`}
+        target="_blank"
+        rel="noreferrer"
+        aria-label="View transaction"
+      >
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+          <path d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+      </a>
+    );
   }
 
   return (
@@ -63,7 +124,7 @@ export default function RechargeView({
         ) : (
           <p className="muted">Loading account...</p>
         )}
-        <div className="row" style={{ marginTop: 12 }}>
+        <div className="row">
           <button disabled={isBusy} className="primary" onClick={() => openDepositDialog()}>
             Add deposit
           </button>
@@ -170,55 +231,75 @@ export default function RechargeView({
             className="icon-button plain"
             type="button"
             aria-label="Refresh deposit history"
-            disabled={isBusy}
+            disabled={isBusy || depositsLoading}
             onClick={loadDeposits}
           >
             <RefreshIcon />
           </button>
         }
       >
-        {deposits.length ? (
-          <div className="deposit-list">
-            {deposits.map((item) => (
-              <div className="deposit-item" key={item.id}>
-                <div className="deposit-left">
-                  <div className="deposit-top">
-                    <div className="deposit-coin-icon">U</div>
-                    <div className="deposit-main">
-                      <div className="deposit-amount">{item.amount} {item.currency}</div>
-                      <div className={`deposit-status ${item.status}`}>{item.status}</div>
-                    </div>
-                    {item.settled_at && (
-                      <span className="deposit-time">
-                        {formatDateTime(item.settled_at)}
-                      </span>
-                    )}
-                  </div>
-                  <div className="deposit-bottom">
-                    <span className="deposit-network">Base</span>
-                    {item.payer_address && (
-                      <span className="deposit-address">{shortAddress(item.payer_address)}</span>
-                    )}
-                  </div>
-                </div>
-                <div className="deposit-right">
-                  {item.tx_hash && (
-                    <a
-                      className="icon-button open-link"
-                      href={`https://basescan.org/tx/${item.tx_hash}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      aria-label="View transaction"
-                    >
-                      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-                        <path d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
-                    </a>
-                  )}
-                </div>
-              </div>
-            ))}
+        {depositsLoading ? (
+          <div className="deposit-history-loading" aria-label="Loading deposits">
+            <div className="spinner" />
           </div>
+        ) : deposits.length ? (
+          <>
+            <div className="deposit-table-wrap" ref={depositTableRef}>
+              <table className="data-table deposit-table">
+                <thead>
+                  <tr>
+                    <th>Amount</th>
+                    <th>Network</th>
+                    <th>Payer</th>
+                    <th>Status</th>
+                    <th>Settled</th>
+                    <th className="actions">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {deposits.map((item) => (
+                    <tr key={item.id}>
+                      <td><strong>{item.amount} {item.currency}</strong></td>
+                      <td>Base</td>
+                      <td className="mono">{item.payer_address ? shortAddress(item.payer_address) : "--"}</td>
+                      <td>{renderDepositStatus(item.status)}</td>
+                      <td>{item.settled_at ? formatDateTime(item.settled_at) : "--"}</td>
+                      <td className="actions">{renderDepositExplorerLink(item)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <DataList className="deposit-mobile-list">
+              {deposits.map((item) => (
+                <DataListItem className="deposit-mobile-item" key={item.id}>
+                  <div className="deposit-mobile-main">
+                    {renderCurrencyIcon(item.currency)}
+                    <div className="deposit-mobile-info">
+                      <div className="deposit-mobile-meta-row">
+                        <span>Base</span>
+                        <span className="mono">{item.payer_address ? shortAddress(item.payer_address) : "Unknown payer"}</span>
+                      </div>
+                      <div className="deposit-mobile-status-row">
+                        {renderDepositStatus(item.status)}
+                      </div>
+                      <div className="deposit-mobile-time-row">
+                        {item.settled_at ? formatDateTime(item.settled_at) : "Pending settlement"}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="deposit-mobile-side">
+                    <span className="deposit-mobile-amount">
+                      <span>{item.amount}</span>
+                      <span>{item.currency}</span>
+                    </span>
+                    {renderDepositExplorerLink(item)}
+                  </div>
+                </DataListItem>
+              ))}
+            </DataList>
+          </>
         ) : (
           <p className="muted">No deposits yet. Add a deposit to get started.</p>
         )}

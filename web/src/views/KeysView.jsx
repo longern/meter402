@@ -207,7 +207,7 @@ export default function KeysView({
           </button>
         }
       >
-        <div style={{ marginBottom: 12 }}>
+        <div className="card-action-row">
           <button disabled={isBusy} className="primary" onClick={openCreateKeyDialog}>Create key</button>
         </div>
 
