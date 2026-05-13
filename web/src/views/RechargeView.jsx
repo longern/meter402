@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useI18n } from "../i18n";
 import CardSection from "../CardSection";
 import DataList, { DataListItem } from "../DataList";
 import Modal from "../Modal";
@@ -35,6 +36,7 @@ export default function RechargeView({
   setNewApiKey,
   waitForAutopayAuthorization,
 }) {
+  const { t } = useI18n();
   const autopayEndpoint = account?.autopay_url || "";
   const [addressCopied, setAddressCopied] = useState(false);
   const depositTableRef = useRef(null);
@@ -111,28 +113,28 @@ export default function RechargeView({
 
   return (
     <>
-      <CardSection title="Account Balance">
+      <CardSection title={t("Account Balance")}>
         {account ? (
           <div className="balance-panel">
-            <span className="balance-label">Deposit Balance</span>
+            <span className="balance-label">{t("Deposit Balance")}</span>
             <span className="balance-value">{account.deposit_balance} USDC</span>
-            <span className="balance-label">Unpaid Invoices</span>
+            <span className="balance-label">{t("Unpaid Invoices")}</span>
             <span className="balance-value">{account.unpaid_invoice_total} USDC</span>
-            <span className="balance-label">Status</span>
-            <span className="balance-value">{account.status}</span>
+            <span className="balance-label">{t("Status")}</span>
+            <span className="balance-value">{t(account.status)}</span>
           </div>
         ) : (
           <p className="muted">Loading account...</p>
         )}
         <div className="row">
           <button disabled={isBusy} className="primary" onClick={() => openDepositDialog()}>
-            Add deposit
+            {t("Add deposit")}
           </button>
         </div>
       </CardSection>
 
       <CardSection
-        title="Autopay Wallet"
+        title={t("Autopay Wallet")}
         actions={
           identity?.owner && autopayEndpoint ? (
             <button
@@ -150,7 +152,7 @@ export default function RechargeView({
         {identity?.owner ? (
           <>
             <div className="balance-panel">
-              <span className="balance-label">Endpoint</span>
+              <span className="balance-label">{t("URL")}</span>
               <div className="endpoint-row">
                 <span className={`balance-value mono${autopayEndpoint ? "" : " muted"}`}>
                   {autopayEndpoint || "Not configured"}
@@ -186,7 +188,7 @@ export default function RechargeView({
               </div>
               {autopayEndpoint && autopayWalletBalance?.address && (
                 <>
-                  <span className="balance-label">Address</span>
+                  <span className="balance-label">{t("Address")}</span>
                   <div className="address-row">
                     <span className="balance-value mono">
                       {shortAddress(autopayWalletBalance.address)}
@@ -210,7 +212,7 @@ export default function RechargeView({
                       )}
                     </button>
                   </div>
-                  <span className="balance-label">Balance</span>
+                  <span className="balance-label">{t("Balance")}</span>
                   <span className="balance-value">
                     {`${autopayWalletBalance.balance} ${autopayWalletBalance.symbol}`}
                   </span>
@@ -225,7 +227,7 @@ export default function RechargeView({
       </CardSection>
 
       <CardSection
-        title="Deposit History"
+        title={t("Deposit History")}
         actions={
           <button
             className="icon-button plain"

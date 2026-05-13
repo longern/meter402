@@ -4,9 +4,10 @@ import QRCode from "qrcode";
 import HomePage from "./HomePage";
 import PayDepositPage from "./PayDepositPage";
 import { LoginPage, WalletLoginPage } from "./LoginPage";
+import { I18nProvider, useI18n } from "./i18n";
 import DepositDialog from "./DepositDialog";
-import RechargeView from "./views/RechargeView";
 import KeysView from "./views/KeysView";
+import RechargeView from "./views/RechargeView";
 import UsageView from "./views/UsageView";
 import AutopayView from "./views/AutopayView";
 import SettingsView from "./views/SettingsView";
@@ -72,6 +73,7 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
   const [editEndpointOpen, setEditEndpointOpen] = useState(false);
   const [depositDialogOpen, setDepositDialogOpen] = useState(false);
   const [account, setAccount] = useState(null);
+  const { t } = useI18n();
   const [accountMissing, setAccountMissing] = useState(false);
   const [apiKeys, setApiKeys] = useState([]);
   const [lastInvoices, setLastInvoices] = useState([]);
@@ -668,11 +670,11 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
   }
 
   const navItems = [
-    { href: "/console/recharge", view: "recharge", label: "Recharge" },
-    { href: "/console/autopay", view: "autopay", label: "Autopay Limits" },
-    { href: "/console/keys", view: "keys", label: "API Keys" },
-    { href: "/console/usage", view: "usage", label: "Usage" },
-    { href: "/console/settings", view: "settings", label: "Settings" },
+    { href: "/console/recharge", view: "recharge", label: t("Recharge") },
+    { href: "/console/autopay", view: "autopay", label: t("Autopay Limits") },
+    { href: "/console/keys", view: "keys", label: t("API Keys", { ns: "nav" }) },
+    { href: "/console/usage", view: "usage", label: t("Usage") },
+    { href: "/console/settings", view: "settings", label: t("Settings") },
   ];
 
   function closeSidebar() {
@@ -753,7 +755,7 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
 
         <div className="console-header">
           <div>
-            <h1>{accountMissing ? "Activate account" : activeItem.label}</h1>
+            <h1>{accountMissing ? t("Activate account") : activeItem.label}</h1>
           </div>
         </div>
 
@@ -966,4 +968,6 @@ function parseSocketMessage(data) {
   return JSON.parse(data);
 }
 
-createRoot(document.getElementById("root")).render(<App />);
+createRoot(document.getElementById("root")).render(
+  React.createElement(I18nProvider, null, React.createElement(App))
+);

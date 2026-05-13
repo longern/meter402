@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useI18n } from "../i18n";
 import CardSection from "../CardSection";
 import DataList, { DataListItem } from "../DataList";
 import Modal from "../Modal";
@@ -57,6 +58,7 @@ export default function KeysView({
   const [copiedBaseUrl, setCopiedBaseUrl] = useState("");
   const [selectedProviderPath, setSelectedProviderPath] = useState(GATEWAY_PROVIDERS[0]?.path || "");
   const [openActionMenu, setOpenActionMenu] = useState("");
+  const { t } = useI18n();
   const baseUrlCopyTimerRef = useRef(null);
   const selectedProvider =
     GATEWAY_PROVIDERS.find((provider) => provider.path === selectedProviderPath) ||
@@ -194,7 +196,7 @@ export default function KeysView({
       </CardSection>
 
       <CardSection
-        title="API Keys"
+        title={t("API Keys")}
         actions={
           <button
             className="icon-button plain"
