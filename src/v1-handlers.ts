@@ -4,7 +4,6 @@ authenticate,
 import { claimAccountGate, releaseAccountGate } from "./account-gate";
 import {
 buildAiGatewayRequest,
-extractUsageFromSseBuffer,
 extractUsageFromText,
 fetchAiGatewayLogByEventId,
 fetchAiGatewayLogCost,
@@ -72,14 +71,6 @@ async function handleChatCompletions(
 
   const body = (await readJsonObject(request)) as ChatBody;
   const stream = body.stream === true;
-  if (stream) {
-    body.stream_options = {
-      ...(typeof body.stream_options === "object" && body.stream_options
-        ? body.stream_options
-        : {}),
-      include_usage: true,
-    };
-  }
 
   const requestId = makeId("req");
   const started = await startMeteredRequest(env, account, requestId, String(body.model ?? ""), stream);
@@ -130,14 +121,14 @@ async function handleChatCompletions(
   }
 
   if (stream) {
-    return proxyStreamingResponse(
+    return proxyPassthroughResponse(
       upstreamResponse,
       env,
       ctx,
       account.id,
       leaseId,
       requestId,
-      body,
+      body.model,
     );
   }
 
@@ -467,8 +458,9 @@ async function handleGenericV1Endpoint(
   }
 
   const model = typeof bodyJson?.model === "string" ? bodyJson.model : endpoint;
+  const stream = bodyJson?.stream === true;
   const requestId = makeId("req");
-  const started = await startMeteredRequest(env, account, requestId, model, false);
+  const started = await startMeteredRequest(env, account, requestId, model, stream);
   if (started instanceof Response) return started;
   const leaseId = started.leaseId;
 
@@ -515,60 +507,15 @@ async function handleGenericV1Endpoint(
     });
   }
 
-  const responseContentType =
-    upstreamResponse.headers.get("content-type") || "";
-  const responseIsJson = responseContentType.includes("application/json");
-
-  let usage: Usage | null = null;
-  let responseBody: ArrayBuffer | string;
-
-  if (responseIsJson) {
-    const responseText = await upstreamResponse.text();
-    responseBody = responseText;
-    usage = extractUsageFromText(responseText);
-  } else {
-    responseBody = await upstreamResponse.arrayBuffer();
-  }
-
-  const headers = cloneHeaders(upstreamResponse.headers);
-  headers.set("meteria402-request-id", requestId);
-
-  if (!usage) {
-    await deferMeteredRequestForGatewayReconcile(
-      env,
-      account.id,
-      leaseId,
-      requestId,
-      model,
-      null,
-      upstreamResponse.headers,
-    );
-    ctx.waitUntil(reconcileGatewayLogAfterDelay(env, requestId));
-    headers.set("meteria402-reconcile", "pending");
-    return new Response(responseBody, {
-      status: upstreamResponse.status,
-      statusText: upstreamResponse.statusText,
-      headers,
-    });
-  }
-
-  await deferMeteredRequestForGatewayReconcile(
+  return proxyPassthroughResponse(
+    upstreamResponse,
     env,
+    ctx,
     account.id,
     leaseId,
     requestId,
     model,
-    usage,
-    upstreamResponse.headers,
   );
-  ctx.waitUntil(reconcileGatewayLogAfterDelay(env, requestId));
-  headers.set("meteria402-reconcile", "pending");
-
-  return new Response(responseBody, {
-    status: upstreamResponse.status,
-    statusText: upstreamResponse.statusText,
-    headers,
-  });
 }
 
 async function startMeteredRequest(
@@ -1208,14 +1155,14 @@ async function createUnpaidInvoiceForCompletedRequest(
   ]);
 }
 
-function proxyStreamingResponse(
+function proxyPassthroughResponse(
   upstreamResponse: Response,
   env: Env,
   ctx: ExecutionContext,
   accountId: string,
   leaseId: string,
   requestId: string,
-  body: ChatBody,
+  model: unknown,
 ): Response {
   if (!upstreamResponse.body) {
     ctx.waitUntil(
@@ -1225,7 +1172,7 @@ function proxyStreamingResponse(
           accountId,
           leaseId,
           requestId,
-          body.model,
+          model,
           null,
           upstreamResponse.headers,
         );
@@ -1240,70 +1187,32 @@ function proxyStreamingResponse(
 
   const headers = cloneHeaders(upstreamResponse.headers);
   headers.set("meteria402-request-id", requestId);
+  headers.set("meteria402-reconcile", "pending");
   const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
-  const reader = upstreamResponse.body.getReader();
-  const writer = writable.getWriter();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let usage: Usage | null = null;
 
   ctx.waitUntil(
     (async () => {
       try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (value) {
-            buffer += decoder.decode(value, { stream: true });
-            usage = extractUsageFromSseBuffer(buffer) ?? usage;
-            const lastDoubleBreak = Math.max(
-              buffer.lastIndexOf("\n\n"),
-              buffer.lastIndexOf("\r\n\r\n"),
-            );
-            if (lastDoubleBreak >= 0) {
-              buffer = buffer.slice(lastDoubleBreak + 2);
-            }
-            await writer.write(value);
-          }
-        }
-        buffer += decoder.decode();
-        usage = extractUsageFromSseBuffer(buffer) ?? usage;
-        if (usage) {
-          await deferMeteredRequestForGatewayReconcile(
-            env,
-            accountId,
-            leaseId,
-            requestId,
-            body.model,
-            usage,
-            upstreamResponse.headers,
-          );
-          await reconcileGatewayLogAfterDelay(env, requestId);
-        } else {
-          await deferMeteredRequestForGatewayReconcile(
-            env,
-            accountId,
-            leaseId,
-            requestId,
-            body.model,
-            null,
-            upstreamResponse.headers,
-          );
-          await reconcileGatewayLogAfterDelay(env, requestId);
-        }
-        await writer.close();
+        await upstreamResponse.body!.pipeTo(writable);
+        await deferMeteredRequestForGatewayReconcile(
+          env,
+          accountId,
+          leaseId,
+          requestId,
+          model,
+          null,
+          upstreamResponse.headers,
+        );
+        await reconcileGatewayLogAfterDelay(env, requestId);
       } catch (error) {
-        console.error("Streaming proxy failed", error);
+        console.error("Passthrough proxy failed", error);
         await failMeteredRequest(
           env,
           accountId,
           leaseId,
           requestId,
-          "stream_proxy_failed",
+          "passthrough_proxy_failed",
         );
-        await writer.abort(error);
-      } finally {
-        reader.releaseLock();
       }
     })(),
   );

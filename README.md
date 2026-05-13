@@ -257,6 +257,6 @@ If the previous request created an unpaid invoice, the next model request return
 - API keys are shown only once.
 - Account ownership is controlled by the owner wallet stored as `owner_address`, not by API keys. If an API key is lost, sign in with the owner wallet and create a new key from `/console`.
 - Owner-wallet loss recovery is not implemented. Rebinding currently requires the existing owner wallet to sign the change.
-- Streaming requests ask the upstream for `stream_options.include_usage = true`.
+- Streaming responses are proxied through without buffering; billing relies on Cloudflare AI Gateway log reconciliation.
 - Successful metered requests are marked `pending_reconcile` first. Billing is delayed until the Worker can read the Cloudflare AI Gateway log cost, then the request is settled and an invoice is created.
 - AI Gateway log reconciliation runs shortly after the response with `waitUntil` retries and is swept again by the scheduled Worker trigger.

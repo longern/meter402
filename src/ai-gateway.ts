@@ -195,23 +195,6 @@ export function extractUsageFromText(text: string): Usage | null {
   }
 }
 
-export function extractUsageFromSseBuffer(buffer: string): Usage | null {
-  let latest: Usage | null = null;
-  const lines = buffer.split(/\r?\n/);
-  for (const line of lines) {
-    if (!line.startsWith("data:")) continue;
-    const data = line.slice(5).trim();
-    if (!data || data === "[DONE]") continue;
-    try {
-      const parsed = JSON.parse(data) as { usage?: unknown };
-      latest = normalizeUsage(parsed.usage) ?? latest;
-    } catch {
-      // Ignore partial or non-JSON server-sent events.
-    }
-  }
-  return latest;
-}
-
 function formatUpstreamBaseUrl(upstreamUrl: string, provider: string): string {
   const base = upstreamUrl.replace(/\/$/, "");
   if (base.includes("{provider}")) {
