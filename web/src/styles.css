@@ -1462,9 +1462,61 @@ textarea {
 
 .usage-mobile-meta {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 6px 8px;
+  justify-content: flex-start;
+  gap: 12px;
+  min-width: 0;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.usage-mobile-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: stretch;
+  padding: 12px 0;
+}
+
+.usage-mobile-primary,
+.usage-mobile-metrics {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.usage-mobile-primary strong {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+.usage-mobile-primary .status-chip {
+  flex: 0 0 auto;
+}
+
+.usage-mobile-meta > span,
+.usage-mobile-metrics > span {
+  min-width: 0;
+}
+
+.usage-mobile-meta .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-mobile-metrics {
+  justify-content: flex-start;
+  gap: 8px;
+  color: #111827;
+  font-size: 14px;
+  line-height: 1.35;
 }
 
 .invoice-copy-button {

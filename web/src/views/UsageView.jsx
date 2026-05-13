@@ -68,6 +68,13 @@ export default function UsageView({
     );
   }
 
+  function formatRequestCost(item) {
+    if (item.status !== "completed" || item.final_cost == null || item.final_cost === "") {
+      return "--";
+    }
+    return `$${item.final_cost}`;
+  }
+
   function renderInvoiceStatus(status) {
     return (
       <span className={`status-chip ${status || "unknown"}`}>
@@ -112,7 +119,7 @@ export default function UsageView({
                       <td><strong>{item.model || "Unknown model"}</strong></td>
                       <td>{renderRequestStatus(item.status)}</td>
                       <td className="numeric">{item.total_tokens ?? 0}</td>
-                      <td className="numeric">{item.final_cost || "0.000000"}</td>
+                      <td className="numeric">{formatRequestCost(item)}</td>
                       <td>{item.started_at ? formatDateTime(item.started_at) : "--"}</td>
                       <td className="mono">{shortId(item.id)}</td>
                     </tr>
@@ -123,16 +130,19 @@ export default function UsageView({
 
             <DataList className="usage-mobile-list">
               {requests.map((item) => (
-                <DataListItem key={item.id}>
-                  <div>
+                <DataListItem className="usage-mobile-item" key={item.id}>
+                  <div className="usage-mobile-primary">
                     <strong>{item.model || "Unknown model"}</strong>
-                    <span className="usage-mobile-meta">
-                      {item.started_at ? `${formatDateTime(item.started_at)} · ` : ""}
-                      {renderRequestStatus(item.status)}
-                      <span>{item.total_tokens ?? 0} tokens · {item.final_cost || "0.000000"}</span>
-                    </span>
+                    {renderRequestStatus(item.status)}
                   </div>
-                  <span className="mono">{shortId(item.id)}</span>
+                  <div className="usage-mobile-meta">
+                    <span>{item.started_at ? formatDateTime(item.started_at) : "--"}</span>
+                    <span className="mono">{shortId(item.id)}</span>
+                  </div>
+                  <div className="usage-mobile-metrics">
+                    <span>{item.total_tokens ?? 0} tokens</span>
+                    <span>{formatRequestCost(item)}</span>
+                  </div>
                 </DataListItem>
               ))}
             </DataList>
