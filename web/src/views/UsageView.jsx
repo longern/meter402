@@ -1,7 +1,25 @@
+import { useEffect, useRef, useState } from "react";
 import CardSection from "../CardSection";
 import DataList, { DataListItem } from "../DataList";
 import { ChevronIcon, RefreshIcon } from "../icons";
 import { formatDateTime, shortId } from "../utils";
+
+function InvoiceCopyIcon({ copied }) {
+  if (copied) {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M5 13l4 4L19 7" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="9" y="9" width="10" height="10" rx="2" />
+      <path d="M6 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
+}
 
 export default function UsageView({
   requests,
@@ -17,6 +35,47 @@ export default function UsageView({
   loadInvoices,
   autopayInvoice,
 }) {
+  const [copiedInvoiceId, setCopiedInvoiceId] = useState("");
+  const invoiceCopyTimerRef = useRef(null);
+
+  useEffect(() => () => {
+    if (invoiceCopyTimerRef.current) {
+      window.clearTimeout(invoiceCopyTimerRef.current);
+    }
+  }, []);
+
+  async function copyInvoiceId(id) {
+    try {
+      await navigator.clipboard.writeText(id);
+      setCopiedInvoiceId(id);
+      if (invoiceCopyTimerRef.current) {
+        window.clearTimeout(invoiceCopyTimerRef.current);
+      }
+      invoiceCopyTimerRef.current = window.setTimeout(() => {
+        setCopiedInvoiceId("");
+        invoiceCopyTimerRef.current = null;
+      }, 1400);
+    } catch (error) {
+      console.error("Failed to copy invoice ID", error);
+    }
+  }
+
+  function renderRequestStatus(status) {
+    return (
+      <span className={`status-chip ${status || "unknown"}`}>
+        {status || "unknown"}
+      </span>
+    );
+  }
+
+  function renderInvoiceStatus(status) {
+    return (
+      <span className={`status-chip ${status || "unknown"}`}>
+        {status || "unknown"}
+      </span>
+    );
+  }
+
   return (
     <>
       <CardSection
@@ -34,20 +93,50 @@ export default function UsageView({
         }
       >
         {requests.length ? (
-          <DataList>
-            {requests.map((item) => (
-              <DataListItem key={item.id}>
-                <div>
-                  <strong>{item.model || "Unknown model"}</strong>
-                  <span>
-                    {item.started_at ? `${formatDateTime(item.started_at)} · ` : ""}
-                    {item.status} · {item.total_tokens ?? 0} tokens · {item.final_cost || "0.000000"}
-                  </span>
-                </div>
-                <span className="mono">{shortId(item.id)}</span>
-              </DataListItem>
-            ))}
-          </DataList>
+          <>
+            <div className="usage-table-wrap">
+              <table className="data-table usage-table">
+                <thead>
+                  <tr>
+                    <th>Model</th>
+                    <th>Status</th>
+                    <th className="numeric">Tokens</th>
+                    <th className="numeric">Cost</th>
+                    <th>Started</th>
+                    <th>ID</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {requests.map((item) => (
+                    <tr key={item.id}>
+                      <td><strong>{item.model || "Unknown model"}</strong></td>
+                      <td>{renderRequestStatus(item.status)}</td>
+                      <td className="numeric">{item.total_tokens ?? 0}</td>
+                      <td className="numeric">{item.final_cost || "0.000000"}</td>
+                      <td>{item.started_at ? formatDateTime(item.started_at) : "--"}</td>
+                      <td className="mono">{shortId(item.id)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <DataList className="usage-mobile-list">
+              {requests.map((item) => (
+                <DataListItem key={item.id}>
+                  <div>
+                    <strong>{item.model || "Unknown model"}</strong>
+                    <span className="usage-mobile-meta">
+                      {item.started_at ? `${formatDateTime(item.started_at)} · ` : ""}
+                      {renderRequestStatus(item.status)}
+                      <span>{item.total_tokens ?? 0} tokens · {item.final_cost || "0.000000"}</span>
+                    </span>
+                  </div>
+                  <span className="mono">{shortId(item.id)}</span>
+                </DataListItem>
+              ))}
+            </DataList>
+          </>
         ) : (
           <p className="muted">No metered gateway requests yet.</p>
         )}
@@ -92,16 +181,57 @@ export default function UsageView({
           <button disabled={isBusy} className="primary" onClick={autopayInvoice}>Pay invoice</button>
         </div>
         {lastInvoices.length ? (
-          <DataList>
-            {lastInvoices.map((item) => (
-              <DataListItem key={item.id}>
-                <div>
-                  <strong>{item.amount_due} {item.currency}</strong>
-                  <span>{item.status} · {shortId(item.id)}</span>
-                </div>
-              </DataListItem>
-            ))}
-          </DataList>
+          <>
+            <div className="invoice-table-wrap">
+              <table className="data-table invoice-table">
+                <thead>
+                  <tr>
+                    <th>Amount</th>
+                    <th>Status</th>
+                    <th>Created</th>
+                    <th>Paid</th>
+                    <th>ID</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {lastInvoices.map((item) => (
+                    <tr key={item.id}>
+                      <td><strong>{item.amount_due} {item.currency}</strong></td>
+                      <td>{renderInvoiceStatus(item.status)}</td>
+                      <td>{item.created_at ? formatDateTime(item.created_at) : "--"}</td>
+                      <td>{item.paid_at ? formatDateTime(item.paid_at) : "--"}</td>
+                      <td className="mono">{shortId(item.id)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <DataList className="invoice-mobile-list">
+              {lastInvoices.map((item) => (
+                <DataListItem className="invoice-mobile-item" key={item.id}>
+                  <div className="invoice-mobile-main">
+                    <strong>{item.amount_due} {item.currency}</strong>
+                    <span className="invoice-mobile-id-row">
+                      <span className="mono">{shortId(item.id)}</span>
+                      <button
+                        type="button"
+                        className={`invoice-copy-button${copiedInvoiceId === item.id ? " copied" : ""}`}
+                        aria-label={copiedInvoiceId === item.id ? "Invoice ID copied" : "Copy invoice ID"}
+                        title={copiedInvoiceId === item.id ? "Copied" : "Copy invoice ID"}
+                        onClick={() => copyInvoiceId(item.id)}
+                      >
+                        <InvoiceCopyIcon copied={copiedInvoiceId === item.id} />
+                      </button>
+                    </span>
+                  </div>
+                  <div className="invoice-mobile-status">
+                    {renderInvoiceStatus(item.status)}
+                  </div>
+                </DataListItem>
+              ))}
+            </DataList>
+          </>
         ) : (
           <p className="muted">No unpaid usage charges yet.</p>
         )}

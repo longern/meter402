@@ -1,5 +1,10 @@
 import { useEffect, useState } from "react";
 import QRCode from "qrcode";
+import ActionMenu, {
+  actionMenuButtonClassName,
+  actionMenuShellClassName,
+  getActionMenuPosition,
+} from "../ActionMenu";
 import CardSection from "../CardSection";
 import DataList, { DataListItem } from "../DataList";
 import Modal from "../Modal";
@@ -33,30 +38,43 @@ export default function AutopayView({
   capApprovalCopied,
   copyCapApprovalLink,
 }) {
-  const [openCapabilityActionMenu, setOpenCapabilityActionMenu] = useState("");
+  const [openCapabilityActionMenu, setOpenCapabilityActionMenu] = useState(null);
 
   useEffect(() => {
     function closeActionMenu(event) {
-      if (event.target.closest?.(".capability-action-menu-shell")) return;
-      setOpenCapabilityActionMenu("");
+      if (event.target.closest?.("[data-action-menu-shell], [data-action-menu-root]")) return;
+      setOpenCapabilityActionMenu(null);
     }
 
     function closeActionMenuOnEscape(event) {
-      if (event.key === "Escape") setOpenCapabilityActionMenu("");
+      if (event.key === "Escape") setOpenCapabilityActionMenu(null);
+    }
+
+    function closeFloatingActionMenu() {
+      setOpenCapabilityActionMenu(null);
     }
 
     document.addEventListener("click", closeActionMenu);
     document.addEventListener("keydown", closeActionMenuOnEscape);
+    window.addEventListener("resize", closeFloatingActionMenu);
+    window.addEventListener("scroll", closeFloatingActionMenu, true);
 
     return () => {
       document.removeEventListener("click", closeActionMenu);
       document.removeEventListener("keydown", closeActionMenuOnEscape);
+      window.removeEventListener("resize", closeFloatingActionMenu);
+      window.removeEventListener("scroll", closeFloatingActionMenu, true);
     };
   }, []);
 
   function handleCapabilityAction(action, id) {
-    setOpenCapabilityActionMenu("");
+    setOpenCapabilityActionMenu(null);
     action(id);
+  }
+
+  function toggleCapabilityActionMenu(event, id) {
+    const position = getActionMenuPosition(event.currentTarget, { height: 48 });
+    setOpenCapabilityActionMenu((current) => (current?.id === id ? null : { id, position }));
   }
 
   function renderCapabilityStatus(status) {
@@ -69,14 +87,14 @@ export default function AutopayView({
 
   function renderCapabilityActionMenu(item) {
     return (
-      <div className="api-key-action-menu-shell capability-action-menu-shell">
+      <div className={actionMenuShellClassName()} data-action-menu-shell>
         <button
-          className="icon-button plain api-key-action-button capability-action-button"
+          className={actionMenuButtonClassName("icon-button plain")}
           type="button"
           aria-label={`Open actions for pre-approval ${shortAddress(item.owner_address)}`}
-          aria-expanded={openCapabilityActionMenu === item.id}
+          aria-expanded={openCapabilityActionMenu?.id === item.id}
           disabled={isBusy}
-          onClick={() => setOpenCapabilityActionMenu((current) => current === item.id ? "" : item.id)}
+          onClick={(event) => toggleCapabilityActionMenu(event, item.id)}
         >
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <circle cx="5" cy="12" r="1.7" />
@@ -84,19 +102,20 @@ export default function AutopayView({
             <circle cx="19" cy="12" r="1.7" />
           </svg>
         </button>
-        {openCapabilityActionMenu === item.id && (
-          <div className="api-key-action-menu capability-action-menu" role="menu">
-            <button
-              type="button"
-              role="menuitem"
-              className="danger"
-              disabled={item.status === "revoked"}
-              onClick={() => handleCapabilityAction(revokeCapability, item.id)}
-            >
-              Revoke
-            </button>
-          </div>
-        )}
+        <ActionMenu
+          open={openCapabilityActionMenu?.id === item.id}
+          position={openCapabilityActionMenu?.position}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            className="danger"
+            disabled={item.status === "revoked"}
+            onClick={() => handleCapabilityAction(revokeCapability, item.id)}
+          >
+            Revoke
+          </button>
+        </ActionMenu>
       </div>
     );
   }

@@ -105,21 +105,33 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
   }, [initialIdentity?.owner]);
 
   useEffect(() => {
-    if (identity?.owner) {
+    if (identity?.owner && activeView !== "recharge") {
       loadAccount();
     }
   }, [identity?.owner]);
 
   useEffect(() => {
-    if (activeView !== "recharge" || !identity?.owner || !account) return;
-    loadDeposits();
-    if (account.autopay_url) {
-      loadAutopayWalletBalance();
-    } else {
+    if (activeView !== "recharge" || !identity?.owner) return;
+    let cancelled = false;
+
+    async function refreshRechargeView() {
+      const refreshedAccount = await loadAccount();
+      if (cancelled || !refreshedAccount) return;
+      await loadDeposits();
+      if (cancelled) return;
+      if (refreshedAccount.autopay_url) {
+        await loadAutopayWalletBalance(refreshedAccount);
+        return;
+      }
       setAutopayWalletBalance(null);
       setAutopayWalletBalanceError("");
     }
-  }, [activeView, identity?.owner, account?.account_id, account?.autopay_url]);
+
+    refreshRechargeView();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeView, identity?.owner]);
 
   useEffect(() => {
     if (activeView === "autopay" && identity?.owner && account) {
@@ -169,8 +181,8 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
     }
   }
 
-  async function loadAutopayWalletBalance() {
-    if (!identity?.owner || !account?.autopay_url) return;
+  async function loadAutopayWalletBalance(accountSnapshot = account) {
+    if (!identity?.owner || !accountSnapshot?.autopay_url) return;
     setBusy("loadWalletBalance");
     setAutopayWalletBalanceError("");
     try {
@@ -195,6 +207,9 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
       setAutopayWalletBalanceError("");
       setEditEndpointOpen(false);
       show({ message: "Autopay endpoint updated.", autopay_url: json.autopay_url });
+      if (json.autopay_url) {
+        await loadAutopayWalletBalance({ ...(account || {}), autopay_url: json.autopay_url });
+      }
     });
   }
 
@@ -316,6 +331,7 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
       setAutopayUrl(json.autopay_url || DEFAULT_AUTOPAY_URL);
       setAccountMissing(false);
       show(json);
+      return json;
     } catch (error) {
       if (isAccountNotFound(error)) {
         setAccount(null);
@@ -331,8 +347,10 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
         setAutopayWalletBalance(null);
         setAutopayWalletBalanceError("");
         show({ status: "account_activation_required", owner: identity?.owner });
+        return null;
       } else {
         show(readableError(error));
+        return null;
       }
     } finally {
       setBusy("");

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useI18n } from "../i18n";
 import CardSection from "../CardSection";
 import Modal from "../Modal";
 import { readableError, shortAddress } from "../utils";
@@ -13,6 +14,7 @@ export default function SettingsView({
   onSessionChange,
   loadAccount,
 }) {
+  const { t } = useI18n();
   const [newOwner, setNewOwner] = useState("");
   const [status, setStatus] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -39,7 +41,7 @@ export default function SettingsView({
       const signer = accounts?.[0] || "";
       if (!signer) throw new Error("No wallet account selected.");
       if (signer.toLowerCase() !== identity.owner.toLowerCase()) {
-        throw new Error("Connect the current main wallet before signing.");
+        throw new Error("Connect the current sign-in wallet before signing.");
       }
 
       setStatus("Preparing signature...");
@@ -103,10 +105,17 @@ export default function SettingsView({
   return (
     <>
       <CardSection
-        title="Main Wallet"
+        title={t("Sign-in Wallet")}
       >
+        <div className="settings-wallet-warning" role="alert">
+          <strong>Keep your wallet private key safe.</strong>
+          <p>
+            If this sign-in wallet's private key is lost, you may lose access to this account and
+            will not be able to rebind the wallet or manage existing autopay authorizations.
+          </p>
+        </div>
         <div className="settings-owner-panel">
-          <p className="settings-field-label">Current main wallet</p>
+          <p className="settings-field-label">Current sign-in wallet</p>
           <strong>{identity?.owner ? shortAddress(identity.owner) : "Not connected"}</strong>
           {identity?.owner && <code>{identity.owner}</code>}
           <div className="settings-actions">
@@ -127,7 +136,7 @@ export default function SettingsView({
       </CardSection>
 
       <CardSection
-        title="Auto-Recharge"
+        title={t("Auto-Recharge")}
       >
         <div className="settings-owner-panel">
           <p className="settings-field-label">Current minimum</p>
@@ -154,18 +163,26 @@ export default function SettingsView({
         onClose={() => {
           if (!submitting) setRebindOpen(false);
         }}
-        title="Rebind Main Wallet"
+        title={t("Rebind Sign-in Wallet")}
         titleId="rebind-wallet-title"
       >
         <div className="settings-dialog-content">
           <div className="settings-owner-panel">
-            <p className="settings-field-label">Current main wallet</p>
+            <p className="settings-field-label">Current sign-in wallet</p>
             <strong>{identity?.owner ? shortAddress(identity.owner) : "Not connected"}</strong>
             {identity?.owner && <code>{identity.owner}</code>}
           </div>
+          <div className="settings-wallet-warning settings-rebind-warning" role="alert">
+            <ul>
+              <li>
+                Copy and paste the <strong>public wallet address</strong>. Do not paste your private key.
+              </li>
+              <li>After rebinding, existing autopay limits will be revoked.</li>
+            </ul>
+          </div>
           <form className="settings-rebind-form" onSubmit={rebindOwner}>
             <label>
-              <span>New main wallet</span>
+              <span>New sign-in wallet address</span>
               <input
                 value={newOwner}
                 inputMode="text"
@@ -175,9 +192,6 @@ export default function SettingsView({
                 onChange={(event) => setNewOwner(event.target.value)}
               />
             </label>
-            <p className="muted">
-              The current main wallet must sign the rebind request. Existing autopay limits will be revoked.
-            </p>
             {status && <p className="form-status">{status}</p>}
             <div className="settings-actions">
               <button

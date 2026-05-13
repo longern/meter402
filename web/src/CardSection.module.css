@@ -51,6 +51,8 @@
 .content > :global(.data-list),
 .content > :global(.api-key-table-wrap),
 .content > :global(.autopay-table-wrap),
+.content > :global(.usage-table-wrap),
+.content > :global(.invoice-table-wrap),
 .content > :global(.deposit-table-wrap) {
   margin-block: 4px;
 }

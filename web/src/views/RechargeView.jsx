@@ -250,12 +250,12 @@ export default function RechargeView({
               <table className="data-table deposit-table">
                 <thead>
                   <tr>
-                    <th>Amount</th>
-                    <th>Network</th>
-                    <th>Payer</th>
-                    <th>Status</th>
-                    <th>Settled</th>
-                    <th className="actions">Action</th>
+                    <th>{t("Amount")}</th>
+                    <th>{t("Network")}</th>
+                    <th>{t("Payer")}</th>
+                    <th>{t("Status")}</th>
+                    <th>{t("Settled at")}</th>
+                    <th className="actions">{t("Action")}</th>
                   </tr>
                 </thead>
                 <tbody>

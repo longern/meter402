@@ -73,10 +73,14 @@ CREATE TABLE IF NOT EXISTS meteria402_invoices (
   voided_at TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_meteria402_invoices_account_created
-  ON meteria402_invoices(account_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_meteria402_invoices_request_id
   ON meteria402_invoices(request_id);
+CREATE INDEX IF NOT EXISTS idx_meteria402_invoices_account_unpaid_created
+  ON meteria402_invoices(
+    account_id,
+    CASE WHEN status = 'unpaid' THEN 0 ELSE 1 END,
+    created_at DESC
+  );
 
 CREATE TABLE IF NOT EXISTS meteria402_payments (
   id TEXT PRIMARY KEY,

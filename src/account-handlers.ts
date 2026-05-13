@@ -483,8 +483,8 @@ export async function handleListInvoices(
     `SELECT id, request_id, status, amount_due, currency, created_at, paid_at
      FROM meteria402_invoices
      WHERE account_id = ?
-     ORDER BY created_at DESC
-     LIMIT 100`,
+     ORDER BY CASE WHEN status = 'unpaid' THEN 0 ELSE 1 END, created_at DESC
+     LIMIT 10`,
   )
     .bind(account.id)
     .all<{

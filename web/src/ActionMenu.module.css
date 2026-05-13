@@ -1,0 +1,109 @@
+.shell {
+  position: relative;
+  display: inline-flex;
+  justify-content: flex-end;
+}
+
+.button svg {
+  width: 20px;
+  height: 20px;
+  fill: currentColor;
+}
+
+.menu {
+  position: fixed;
+  z-index: 20;
+  min-width: 124px;
+  padding: 6px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.14);
+  transform-origin: top right;
+  animation: action-menu-pop 140ms ease-out;
+}
+
+.menu.closing {
+  pointer-events: none;
+  animation: action-menu-close 110ms ease-in forwards;
+}
+
+.menu button {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 5px;
+  background: transparent;
+  color: #111827;
+  font-size: 13px;
+  font-weight: 650;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.menu button:hover,
+.menu button:focus-visible {
+  background: #f3f4f6;
+}
+
+.menu button:global(.danger) {
+  color: #991b1b;
+}
+
+@keyframes action-menu-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes action-menu-close {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+
+  to {
+    opacity: 0;
+    transform: translateY(-3px) scale(0.98);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .menu,
+  .menu.closing {
+    animation: none;
+  }
+}
+
+@media (max-width: 720px) {
+  :global(.api-key-mobile-item) .shell,
+  :global(.autopay-mobile-item) .shell {
+    align-self: start;
+    justify-self: end;
+  }
+
+  :global(.api-key-mobile-item) .button,
+  :global(.autopay-mobile-item) .button {
+    width: 24px;
+    height: 24px;
+    min-height: 24px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: #64748b;
+  }
+
+  :global(.api-key-mobile-item) .button:hover,
+  :global(.api-key-mobile-item) .button:focus-visible,
+  :global(.autopay-mobile-item) .button:hover,
+  :global(.autopay-mobile-item) .button:focus-visible {
+    background: #f3f4f6;
+    color: #111827;
+  }
+}
