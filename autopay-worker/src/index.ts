@@ -119,6 +119,14 @@ const REQUESTER_PROOF_TYPES = {
     { name: "issuedAt", type: "uint256" },
     { name: "expiresAt", type: "uint256" },
   ],
+  AutopaySettlementReport: [
+    { name: "worker", type: "string" },
+    { name: "path", type: "string" },
+    { name: "bodyHash", type: "bytes32" },
+    { name: "nonce", type: "string" },
+    { name: "issuedAt", type: "uint256" },
+    { name: "expiresAt", type: "uint256" },
+  ],
 } as const;
 
 export class AutopayAuthSession implements DurableObject {
@@ -362,6 +370,10 @@ export default {
         return await handlePay(request, env);
       }
 
+      if (request.method === "POST" && url.pathname === "/api/settlement-reports") {
+        return await handleSettlementReport(request, env);
+      }
+
       if (request.method === "GET" && url.pathname === "/api/auth/challenge") {
         return await handleAuthChallenge(request, env);
       }
@@ -580,7 +592,7 @@ async function handlePay(request: Request, env: Env): Promise<Response> {
     throw new HttpError(402, "budget_exceeded", "This payment would exceed the autopay capability total budget.");
   }
 
-  const paymentId = crypto.randomUUID();
+  const paymentId = optionalPaymentId(body.payment_id ?? body.paymentId) ?? crypto.randomUUID();
   const resourceUrl = paymentRequired.resource?.url ?? "";
   const amountDecimal = (() => {
     try {
@@ -621,6 +633,83 @@ async function handlePay(request: Request, env: Env): Promise<Response> {
     authorized_by: authorization.owner,
     auth_request_id: authorization.authRequestId,
     capability_hash: capabilityHash,
+    payment_id: paymentId,
+  });
+}
+
+async function handleSettlementReport(request: Request, env: Env): Promise<Response> {
+  const bodyText = await request.text();
+  const body = parseJsonObject(bodyText);
+  const requesterProof = await verifySettlementReportProof(request, env, bodyText);
+  const paymentId = requireString(body.payment_id ?? body.paymentId, "payment_id");
+  const status = requireString(body.status, "status");
+  if (status !== "settled") {
+    throw new HttpError(400, "unsupported_settlement_status", "Only settled settlement reports are supported.");
+  }
+  const txHash = requireString(body.tx_hash ?? body.txHash, "tx_hash");
+  const autopayRequestId = optionalString(body.autopay_request_id ?? body.autopayRequestId);
+  const settledAt = optionalString(body.settled_at ?? body.settledAt) ?? new Date().toISOString();
+
+  let payment = await env.DB.prepare(
+    `SELECT id, authorization_id, requester_account, tx_hash, status
+     FROM autopay_payments
+     WHERE id = ?`,
+  ).bind(paymentId).first<{
+    id: string;
+    authorization_id: string | null;
+    requester_account: string | null;
+    tx_hash: string | null;
+    status: string;
+  }>();
+
+  if (!payment && autopayRequestId) {
+    payment = await env.DB.prepare(
+      `SELECT id, authorization_id, requester_account, tx_hash, status
+       FROM autopay_payments
+       WHERE authorization_id = ? AND requester_account = ?
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    ).bind(autopayRequestId, requesterProof.account).first<{
+      id: string;
+      authorization_id: string | null;
+      requester_account: string | null;
+      tx_hash: string | null;
+      status: string;
+    }>();
+  }
+
+  if (!payment) {
+    throw new HttpError(404, "payment_not_found", "Autopay payment audit row was not found.");
+  }
+  if (payment.requester_account && payment.requester_account !== requesterProof.account) {
+    throw new HttpError(403, "requester_mismatch", "Settlement report requester does not match the payment requester.");
+  }
+  if (autopayRequestId && payment.authorization_id && payment.authorization_id !== autopayRequestId) {
+    throw new HttpError(409, "authorization_mismatch", "Settlement report authorization does not match the payment audit row.");
+  }
+  if (payment.tx_hash && payment.tx_hash !== txHash) {
+    throw new HttpError(409, "settlement_report_conflict", "Settlement report conflicts with an existing transaction hash.");
+  }
+  if (payment.tx_hash === txHash && payment.status === "confirmed") {
+    return jsonResponse({
+      ok: true,
+      status: "duplicate",
+      payment_id: payment.id,
+      tx_hash: txHash,
+    });
+  }
+
+  await env.DB.prepare(
+    `UPDATE autopay_payments
+     SET tx_hash = ?, status = 'confirmed', settled_at = ?
+     WHERE id = ?`,
+  ).bind(txHash, settledAt, payment.id).run();
+
+  return jsonResponse({
+    ok: true,
+    status: "confirmed",
+    payment_id: payment.id,
+    tx_hash: txHash,
   });
 }
 
@@ -947,6 +1036,60 @@ async function verifyRequesterProof(
   }
   return {
     account: requester.account,
+    nonce,
+    issuedAt,
+    expiresAt,
+    signature: requireHeader(request, "x-requester-signature") as Hex,
+  };
+}
+
+async function verifySettlementReportProof(
+  request: Request,
+  env: Env,
+  bodyText: string,
+): Promise<RequesterProof> {
+  const requesterAccount = requireHeader(request, "x-requester-account");
+  const [network, address] = requesterAccount.split(":").length >= 3
+    ? [
+        `${requesterAccount.split(":")[0]}:${requesterAccount.split(":")[1]}`,
+        requesterAccount.split(":").slice(2).join(":"),
+      ]
+    : ["", ""];
+  if (network !== DEFAULT_NETWORK || !/^0x[a-fA-F0-9]{40}$/.test(address)) {
+    throw new HttpError(403, "invalid_requester_account", "Requester account is invalid.");
+  }
+  const nonce = requireHeader(request, "x-requester-nonce");
+  const issuedAt = requireUintHeader(request, "x-requester-issued-at");
+  const expiresAt = requireUintHeader(request, "x-requester-expires-at");
+  const now = Math.floor(Date.now() / 1000);
+  if (issuedAt > now + 60 || expiresAt < now) {
+    throw new HttpError(403, "requester_proof_expired", "Requester proof has expired.");
+  }
+  const url = new URL(request.url);
+  const valid = await verifyTypedData({
+    address: getAddress(address),
+    domain: {
+      name: REQUESTER_PROOF_DOMAIN_NAME,
+      version: REQUESTER_PROOF_VERSION,
+      chainId: chainIdFromNetwork(network as Network),
+    },
+    types: REQUESTER_PROOF_TYPES,
+    primaryType: "AutopaySettlementReport",
+    message: {
+      worker: url.origin,
+      path: url.pathname,
+      bodyHash: `0x${await sha256Hex(bodyText)}` as Hex,
+      nonce,
+      issuedAt: BigInt(issuedAt),
+      expiresAt: BigInt(expiresAt),
+    },
+    signature: requireHeader(request, "x-requester-signature") as Hex,
+  });
+  if (!valid) {
+    throw new HttpError(403, "invalid_requester_signature", "Requester EIP-712 signature is invalid.");
+  }
+  return {
+    account: requesterAccount,
     nonce,
     issuedAt,
     expiresAt,
@@ -1440,6 +1583,19 @@ function requireString(value: unknown, field: string): string {
     throw new HttpError(400, "missing_field", `${field} is required.`);
   }
   return value.trim();
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function optionalPaymentId(value: unknown): string | undefined {
+  const paymentId = optionalString(value);
+  if (!paymentId) return undefined;
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(paymentId)) {
+    throw new HttpError(400, "invalid_payment_id", "payment_id is invalid.");
+  }
+  return paymentId;
 }
 
 function requireHeader(request: Request, name: string): string {

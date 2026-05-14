@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import AdminDashboard from "./AdminDashboard.jsx";
+import Dashboard from "./Dashboard.jsx";
 import { normalizeApiError } from "./apiError.js";
 import "./styles.css";
 
@@ -23,8 +23,13 @@ function App() {
   const [auditAuth, setAuditAuth] = useState([]);
   const [auditPay, setAuditPay] = useState([]);
   const [auditBusy, setAuditBusy] = useState(false);
+  const [auditLoaded, setAuditLoaded] = useState({
+    authorizations: false,
+    payments: false,
+  });
   const [autopayWalletAddress, setAutopayWalletAddress] = useState("");
   const [autopayPrivateKey, setAutopayPrivateKey] = useState("");
+  const [walletKeyDialogOpen, setWalletKeyDialogOpen] = useState(false);
   const [accountBusy, setAccountBusy] = useState(false);
 
   const [hasWallet, setHasWallet] = useState(false);
@@ -36,14 +41,9 @@ function App() {
     init().catch(showError);
 
     async function init() {
-      // Wait for wallet provider injection (some mobile wallets inject with delay)
-      let attempts = 0;
-      while (!window.ethereum && attempts < 20) {
-        await new Promise((r) => setTimeout(r, 150));
-        attempts++;
-      }
-      setHasWallet(Boolean(window.ethereum));
       if (requestId) {
+        await waitForInjectedWallet();
+        setHasWallet(Boolean(window.ethereum));
         setAuthLoading(true);
         setAuthError(false);
         try {
@@ -60,14 +60,24 @@ function App() {
           setAuthLoading(false);
         }
       } else {
-        // Dashboard mode: check session, then maybe auto-connect wallet
         await checkSession();
-        if (window.ethereum) {
-          await autoConnectWallet();
-        }
+        waitForInjectedWallet().then(() => {
+          setHasWallet(Boolean(window.ethereum));
+          if (window.ethereum) {
+            autoConnectWallet().catch(showError);
+          }
+        });
       }
     }
   }, []);
+
+  async function waitForInjectedWallet() {
+    let attempts = 0;
+    while (!window.ethereum && attempts < 20) {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      attempts++;
+    }
+  }
 
   useEffect(() => {
     const provider = window.ethereum;
@@ -124,15 +134,17 @@ function App() {
 
   async function loadAudit() {
     if (!session) return;
+    const tab = activeTab;
     setAuditBusy(true);
     try {
-      if (activeTab === "authorizations") {
+      if (tab === "authorizations") {
         const data = await fetchJson("/api/audit/authorizations");
         setAuditAuth(data.authorizations || []);
       } else {
         const data = await fetchJson("/api/audit/payments");
         setAuditPay(data.payments || []);
       }
+      setAuditLoaded((current) => ({ ...current, [tab]: true }));
     } catch (err) {
       setWalletStatus(readableErrorMessage(err));
     } finally {
@@ -156,12 +168,24 @@ function App() {
       });
       setAutopayWalletAddress(data.autopay_wallet_address || "");
       setAutopayPrivateKey("");
+      setWalletKeyDialogOpen(false);
       setWalletStatus("Autopay wallet saved.");
     } catch (err) {
       showError(err);
     } finally {
       setAccountBusy(false);
     }
+  }
+
+  function openWalletKeyDialog() {
+    setAutopayPrivateKey("");
+    setWalletKeyDialogOpen(true);
+  }
+
+  function closeWalletKeyDialog() {
+    if (accountBusy) return;
+    setAutopayPrivateKey("");
+    setWalletKeyDialogOpen(false);
   }
 
   async function handleLogin() {
@@ -201,6 +225,7 @@ function App() {
       setPageMode("dashboard");
       setAuditAuth([]);
       setAuditPay([]);
+      setAuditLoaded({ authorizations: false, payments: false });
       setAutopayWalletAddress("");
       setWalletStatus("Signed out.");
     } catch (err) {
@@ -309,242 +334,6 @@ function App() {
   const authPage = Boolean(requestId);
   const policyAsset = policy ? assetLabel(policy.asset, policy.network) : "";
 
-  // Dashboard rendering helpers
-  const renderDashboard = () => {
-    if (checkingSession) {
-      return (
-        <div className="content dashboard-loading">
-          <div className="spinner" role="status" aria-label="Loading" />
-        </div>
-      );
-    }
-
-    if (!session) {
-      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-      return (
-        <>
-          <header className="dashboard-guest-header">
-            <h1>Autopay Dashboard</h1>
-            <p>Sign in to view your authorizations and payments.</p>
-          </header>
-          <div className="content">
-            <div className="login-center">
-              {!hasWallet && (
-                <>
-                  <div className="login-icon">
-                    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                      <rect x="2" y="5" width="20" height="14" rx="2" stroke="currentColor" strokeWidth="1.5"/>
-                      <path d="M2 10h20" stroke="currentColor" strokeWidth="1.5"/>
-                      <circle cx="7" cy="12" r="1" fill="currentColor"/>
-                    </svg>
-                  </div>
-                  <h2>Sign in to continue</h2>
-                  <p className="login-subtitle">Connect your wallet to access your dashboard.</p>
-
-                  {isMobile && (
-                    <>
-                      <div className="divider">
-                        <span>Choose a wallet</span>
-                      </div>
-                      <div className="wallet-list">
-                        <a className="wallet-card" href={`https://go.cb-w.com/m/x/dapp?url=${encodeURIComponent(window.location.href)}`}>
-                          <img src="/wallet-icons/coinbase-wallet.svg" alt="Coinbase Wallet" />
-                          <span className="wallet-name">Coinbase Wallet</span>
-                          <svg className="wallet-arrow" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                          </svg>
-                        </a>
-                        <a className="wallet-card" href={`okx://wallet/dapp/url?dappUrl=${encodeURIComponent(window.location.href)}`}>
-                          <img src="/wallet-icons/okx-wallet.svg" alt="OKX Wallet" />
-                          <span className="wallet-name">OKX Wallet</span>
-                          <svg className="wallet-arrow" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                          </svg>
-                        </a>
-                      </div>
-                      <div className="security-footer">
-                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" stroke="#22c55e" strokeWidth="1.5" fill="#f0fdf4"/>
-                          <path d="M9 12l2 2 4-4" stroke="#22c55e" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                        </svg>
-                        <div>
-                          <p className="security-title">Your wallet connection is secure</p>
-                          <p className="security-desc">We never store your private keys.</p>
-                        </div>
-                      </div>
-                    </>
-                  )}
-
-                  {!isMobile && (
-                    <p className="guide-text" style={{ marginTop: "12px" }}>
-                      Please install a wallet browser extension such as{" "}
-                      <a href="https://metamask.io" target="_blank" rel="noopener noreferrer">MetaMask</a>
-                      {" "}and refresh this page.
-                    </p>
-                  )}
-                </>
-              )}
-
-              {hasWallet && (
-                <>
-                  <div className="login-icon">
-                    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                      <rect x="2" y="5" width="20" height="14" rx="2" stroke="currentColor" strokeWidth="1.5"/>
-                      <path d="M2 10h20" stroke="currentColor" strokeWidth="1.5"/>
-                      <circle cx="7" cy="12" r="1" fill="currentColor"/>
-                    </svg>
-                  </div>
-                  <h2>Sign in to continue</h2>
-                  <p className="login-subtitle">Connect your wallet to access your dashboard.</p>
-                  <div className="wallet-row" style={{ marginTop: "20px" }}>
-                    {ownerAddress ? (
-                      <strong>{shortAddress(ownerAddress)}</strong>
-                    ) : (
-                      <span style={{ color: "#6b7280" }}>Wallet connected, requesting accounts...</span>
-                    )}
-                  </div>
-                  <div className="login-action">
-                    {ownerAddress && (
-                      <button disabled={busy} onClick={() => handleLogin()}>
-                        Sign In
-                      </button>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-        </>
-      );
-    }
-
-    const adminModeButton = session.is_admin ? (
-      <div className="dashboard-content-actions">
-        <button
-          className="dashboard-mode-button"
-          type="button"
-          disabled={busy}
-          onClick={() => setPageMode((current) => current === "admin" ? "dashboard" : "admin")}
-        >
-          {pageMode === "admin" ? "Back to dashboard" : "Go to admin console"}
-        </button>
-      </div>
-    ) : null;
-
-    return (
-      <>
-        <div className="dashboard-topbar">
-          <div className="dashboard-topbar-inner">
-            <h1>{pageMode === "admin" ? "Admin" : "Autopay"}</h1>
-            <div className="dashboard-account">
-              <span className="dashboard-address">{shortAddress(session.owner)}</span>
-              <button className="icon-button" type="button" aria-label="Sign out" disabled={busy} onClick={() => handleLogout()}>
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M10 6H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h4" />
-                  <path d="M14 8l4 4-4 4" />
-                  <path d="M18 12H9" />
-                </svg>
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {pageMode === "admin" ? (
-          <div className="content admin-content">
-            {adminModeButton}
-            <AdminDashboard onStatus={setWalletStatus} />
-          </div>
-        ) : (
-        <div className="content">
-          {adminModeButton}
-          <section className="dashboard-card autopay-wallet-card">
-            <div className="section-heading">
-              <h2>Autopay wallet</h2>
-            </div>
-            <hr className="dashboard-card-divider" />
-            <div className="dashboard-card-body">
-              <strong className="wallet-address-large">{autopayWalletAddress ? shortAddress(autopayWalletAddress) : "Not configured"}</strong>
-              {autopayWalletAddress && <p className="wallet-address-full">{autopayWalletAddress}</p>}
-              <form className="wallet-key-form" onSubmit={handleAutopayWalletSave}>
-                <label htmlFor="autopay-private-key">Private key</label>
-                <input
-                  id="autopay-private-key"
-                  type="password"
-                  autoComplete="off"
-                  spellCheck="false"
-                  placeholder="0x..."
-                  value={autopayPrivateKey}
-                  onChange={(event) => setAutopayPrivateKey(event.target.value)}
-                />
-                <button type="submit" disabled={accountBusy || !autopayPrivateKey.trim()}>
-                  {accountBusy ? "Saving..." : "Save"}
-                </button>
-              </form>
-            </div>
-          </section>
-
-          <section className="dashboard-card">
-            <div className="section-heading">
-              <h2>Activity</h2>
-              <div className="tabs">
-                <button className={activeTab === "authorizations" ? "active" : ""} onClick={() => setActiveTab("authorizations")}>Authorizations</button>
-                <button className={activeTab === "payments" ? "active" : ""} onClick={() => setActiveTab("payments")}>Payments</button>
-              </div>
-            </div>
-            <hr className="dashboard-card-divider" />
-
-            <div className="dashboard-card-body">
-              {auditBusy && <div className="status">Loading...</div>}
-
-              {activeTab === "authorizations" && (
-                <div className="audit-list">
-                  {auditAuth.length === 0 && <div className="empty-cell">No authorizations yet.</div>}
-                  {auditAuth.map((row) => (
-                    <article className="audit-item" key={row.id}>
-                      <div className="audit-main">
-                        <div>
-                          <span className="audit-label">Max amount</span>
-                          <strong className="audit-amount">{formatAuthorizationAmount(row)}</strong>
-                        </div>
-                        <span className={`status-badge ${statusClassName(row.status)}`}>{row.status}</span>
-                      </div>
-                      <div className="audit-meta">
-                        <span>Origin {originHost(row.requester_origin) || "-"}</span>
-                        <span>Created {formatTimestamp(row.created_at)}</span>
-                        <span>Valid until {formatTimestamp(row.policy_valid_before)}</span>
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              )}
-
-              {activeTab === "payments" && (
-                <div className="audit-list">
-                  {auditPay.length === 0 && <div className="empty-cell">No payments yet.</div>}
-                  {auditPay.map((row) => (
-                    <article className="audit-item" key={row.id}>
-                      <div className="audit-main">
-                        <div>
-                          <strong className="audit-amount">{formatPaymentAmount(row)}</strong>
-                        </div>
-                        <span className={`status-badge ${statusClassName(row.status)}`}>{row.status}</span>
-                      </div>
-                      <div className="audit-meta">
-                        <span>{originHost(row.requester_origin) || "-"}</span>
-                        <span>{formatTimestamp(row.created_at)}</span>
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              )}
-            </div>
-          </section>
-        </div>
-        )}
-      </>
-    );
-  };
-
   function returnToRequester() {
     if (authRequest?.return_origin) {
       window.location.assign(authRequest.return_origin);
@@ -582,9 +371,41 @@ function App() {
     );
   }
 
+  const dashboardClassName =
+    !authPage && !checkingSession && !session
+      ? "dashboard-page dashboard-page-guest"
+      : "dashboard-page";
+
   return (
-    <main className={authPage ? "auth-page" : "dashboard-page"}>
-      {!authPage ? renderDashboard() : (
+    <main className={authPage ? "auth-page" : dashboardClassName}>
+      {!authPage ? (
+        <Dashboard
+          checkingSession={checkingSession}
+          session={session}
+          hasWallet={hasWallet}
+          ownerAddress={ownerAddress}
+          busy={busy}
+          pageMode={pageMode}
+          setPageMode={setPageMode}
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          auditAuth={auditAuth}
+          auditPay={auditPay}
+          auditBusy={auditBusy}
+          auditLoaded={auditLoaded}
+          autopayWalletAddress={autopayWalletAddress}
+          autopayPrivateKey={autopayPrivateKey}
+          setAutopayPrivateKey={setAutopayPrivateKey}
+          walletKeyDialogOpen={walletKeyDialogOpen}
+          accountBusy={accountBusy}
+          handleLogin={handleLogin}
+          handleLogout={handleLogout}
+          handleAutopayWalletSave={handleAutopayWalletSave}
+          openWalletKeyDialog={openWalletKeyDialog}
+          closeWalletKeyDialog={closeWalletKeyDialog}
+          onStatus={setWalletStatus}
+        />
+      ) : (
         <>
           <header className={authPage ? "auth-topbar" : ""}>
             {authPage && !loginApproved && (
@@ -950,35 +771,6 @@ function formatPolicyAmount(raw, policy) {
   const symbol = assetLabel(policy.asset, policy.network);
   const formatted = formatTokenAmount(raw, tokenDecimals(policy.asset, policy.network));
   return `${formatted} ${symbol}`;
-}
-
-function formatAuthorizationAmount(row) {
-  if (!row.policy_max_single_amount) return "-";
-  const policy = {
-    asset: row.policy_asset,
-    network: row.policy_network,
-  };
-  return formatPolicyAmount(row.policy_max_single_amount, policy);
-}
-
-function formatPaymentAmount(row) {
-  const symbol = row.currency || assetLabel(row.asset, row.network);
-  if (!row.amount_decimal && !row.amount) return "-";
-  const amount = row.amount_decimal
-    ? trimDecimalZeros(row.amount_decimal)
-    : formatTokenAmount(row.amount, tokenDecimals(row.asset, row.network));
-  return symbol ? `${amount} ${symbol}` : amount;
-}
-
-function statusClassName(value) {
-  return String(value || "").toLowerCase();
-}
-
-function trimDecimalZeros(value) {
-  const text = String(value || "");
-  if (!text.includes(".")) return text;
-  const trimmed = text.replace(/(\.\d*?[1-9])0+$/, "$1").replace(/\.0+$/, "");
-  return trimmed || "0";
 }
 
 function formatTokenAmount(raw, decimals) {

@@ -31,6 +31,7 @@ import {
 
 import {
   completeAutopayForDepositQuote,
+  reportAutopaySettlement,
   startAutopayForDepositQuote,
 } from "./billing-autopay-handlers";
 
@@ -668,6 +669,26 @@ export async function handleDepositAutopayComplete(
   );
   const settleResponse = await handleDepositSettle(settleRequest, env);
   const settlement = await settleResponse.json().catch(() => null);
+  if (settleResponse.ok && settlement && typeof settlement === "object") {
+    await reportAutopaySettlement(env, {
+      autopayUrl:
+        typeof result.autopay_url === "string" ? result.autopay_url : undefined,
+      autopayRequestId:
+        typeof result.worker_autopay_request_id === "string"
+          ? result.worker_autopay_request_id
+          : typeof result.autopay_request_id === "string"
+            ? result.autopay_request_id
+            : undefined,
+      paymentId,
+      status: "settled",
+      amount: formatMoney(quote.amount),
+      txHash:
+        typeof (settlement as Record<string, unknown>).tx_hash === "string"
+          ? ((settlement as Record<string, unknown>).tx_hash as string)
+          : undefined,
+      settledAt: new Date().toISOString(),
+    });
+  }
   return jsonResponse(
     {
       status: settleResponse.ok ? "settled" : "settle_failed",

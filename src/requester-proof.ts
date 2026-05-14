@@ -18,6 +18,14 @@ const REQUESTER_PROOF_TYPES = {
     { name: "issuedAt", type: "uint256" },
     { name: "expiresAt", type: "uint256" },
   ],
+  AutopaySettlementReport: [
+    { name: "worker", type: "string" },
+    { name: "path", type: "string" },
+    { name: "bodyHash", type: "bytes32" },
+    { name: "nonce", type: "string" },
+    { name: "issuedAt", type: "uint256" },
+    { name: "expiresAt", type: "uint256" },
+  ],
 } as const;
 
 export function requesterMetadata(env: Env, request: Request): Record<string, unknown> {
@@ -67,6 +75,39 @@ export async function signedAutopayHeaders(
     headers.set("x-requester-origin", requesterOrigin(env, request));
   }
   return headers;
+}
+
+export async function signedSettlementReportHeaders(
+  env: Env,
+  targetUrl: string,
+  bodyText: string,
+): Promise<Headers> {
+  const account = requesterAccount(env);
+  const now = Math.floor(Date.now() / 1000);
+  const expiresAt = now + 60;
+  const url = new URL(targetUrl);
+  const message = {
+    worker: url.origin,
+    path: url.pathname,
+    bodyHash: `0x${await sha256Hex(bodyText)}` as Hex,
+    nonce: crypto.randomUUID(),
+    issuedAt: BigInt(now),
+    expiresAt: BigInt(expiresAt),
+  };
+  const signature = await account.signTypedData({
+    domain: requesterProofDomain(env),
+    types: REQUESTER_PROOF_TYPES,
+    primaryType: "AutopaySettlementReport",
+    message,
+  });
+  return new Headers({
+    "content-type": "application/json",
+    "x-requester-account": requesterAccountId(env, account.address),
+    "x-requester-nonce": message.nonce,
+    "x-requester-issued-at": String(now),
+    "x-requester-expires-at": String(expiresAt),
+    "x-requester-signature": signature,
+  });
 }
 
 export async function hashAutopayCapability(capability: unknown): Promise<string> {

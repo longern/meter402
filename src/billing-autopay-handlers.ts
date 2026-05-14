@@ -20,6 +20,7 @@ import {
   hashAutopayCapability,
   requesterMetadata,
   signedAutopayHeaders,
+  signedSettlementReportHeaders,
 } from "./requester-proof";
 import { signDepositAutopayState, verifyDepositQuote } from "./signed-state";
 import type {
@@ -44,6 +45,8 @@ type AutopayPaymentResult = {
   status: "approved";
   payment_id: string;
   autopay_request_id?: string;
+  worker_autopay_request_id?: string;
+  autopay_url?: string;
   payment_payload: unknown;
   selected_requirement?: unknown;
   capability_used?: boolean;
@@ -60,6 +63,17 @@ type AutopayPendingResult = Record<string, unknown> & {
 type CapabilityBudgetCharge = {
   id: string;
   amount: number;
+};
+
+type SettlementReportInput = {
+  autopayUrl?: string | null;
+  autopayRequestId?: string;
+  paymentId: string;
+  invoiceId?: string | null;
+  status: "settled";
+  amount: string;
+  txHash?: string;
+  settledAt: string;
 };
 
 export async function handleInvoicePayQuote(
@@ -294,6 +308,7 @@ export async function handleInvoiceAutopayStart(
   if (start.status !== "approved") {
     return jsonResponse(start, { status: 201 });
   }
+  const approvedStart = start as AutopayPaymentResult;
 
   const settlement =
     paymentKind === "deposit"
@@ -302,18 +317,26 @@ export async function handleInvoiceAutopayStart(
           account.id,
           invoice.id,
           paymentId,
-          start.payment_payload,
+          approvedStart.payment_payload,
           undefined,
-          capabilityBudgetCharge(start),
+          capabilityBudgetCharge(approvedStart),
+          {
+            autopayUrl: approvedStart.autopay_url,
+            autopayRequestId: approvedStart.worker_autopay_request_id,
+          },
         )
       : await settleInvoicePayment(
           env,
           account.id,
           invoice.id,
           paymentId,
-          start.payment_payload,
+          approvedStart.payment_payload,
           undefined,
-          capabilityBudgetCharge(start),
+          capabilityBudgetCharge(approvedStart),
+          {
+            autopayUrl: approvedStart.autopay_url,
+            autopayRequestId: approvedStart.worker_autopay_request_id,
+          },
         );
   return jsonResponse(
     {
@@ -352,6 +375,7 @@ export async function handleInvoiceAutopayComplete(
 
   const result = await completeAutopayForPayment(env, request, paymentId);
   if (result.status !== "approved") return jsonResponse(result);
+  const approvedResult = result as AutopayPaymentResult;
 
   if (payment.kind === "deposit") {
     const recharge = await settleRechargePaymentForInvoice(
@@ -359,12 +383,16 @@ export async function handleInvoiceAutopayComplete(
       account.id,
       invoiceId,
       paymentId,
-      result.payment_payload,
+      approvedResult.payment_payload,
       undefined,
-      capabilityBudgetCharge(result),
+      capabilityBudgetCharge(approvedResult),
+      {
+        autopayUrl: approvedResult.autopay_url,
+        autopayRequestId: approvedResult.worker_autopay_request_id,
+      },
     );
     if (recharge.ok) {
-      await markAutopaySettled(env, result.autopay_request_id);
+      await markAutopaySettled(env, approvedResult.autopay_request_id);
     }
     return jsonResponse(
       {
@@ -381,12 +409,16 @@ export async function handleInvoiceAutopayComplete(
     account.id,
     invoiceId,
     paymentId,
-    result.payment_payload,
+    approvedResult.payment_payload,
     undefined,
-    capabilityBudgetCharge(result),
+    capabilityBudgetCharge(approvedResult),
+    {
+      autopayUrl: approvedResult.autopay_url,
+      autopayRequestId: approvedResult.worker_autopay_request_id,
+    },
   );
   if (invoiceSettlement.ok) {
-    await markAutopaySettled(env, result.autopay_request_id);
+    await markAutopaySettled(env, approvedResult.autopay_request_id);
   }
   return jsonResponse(
     {
@@ -416,6 +448,7 @@ async function startAutopayForPayment(
     const capabilityPayload = await tryAutopayWithCapability(
       env,
       payment.account_id,
+      payment.id,
       payment.payment_requirement_json,
       payment.amount,
     );
@@ -429,6 +462,7 @@ async function startAutopayForPayment(
         capability_used: true,
         capability_id: capabilityPayload.capability_id,
         capability_amount: capabilityPayload.capability_amount,
+        autopay_url: capabilityPayload.autopay_url,
       };
     }
   }
@@ -685,6 +719,7 @@ async function completeAutopayForPayment(
       siwe_message: authorization.siwe_message,
       siwe_signature: authorization.siwe_signature,
       paymentRequired,
+      payment_id: paymentId,
     },
     authorization.capability,
   );
@@ -705,6 +740,8 @@ async function completeAutopayForPayment(
     status: "approved",
     payment_id: paymentId,
     autopay_request_id: record.id,
+    worker_autopay_request_id: record.autopay_request_id,
+    autopay_url: record.autopay_url,
     payment_payload: payBody.payment_payload,
     selected_requirement: payBody.selected_requirement,
   };
@@ -780,6 +817,7 @@ export async function completeAutopayForDepositQuote(
       siwe_message: authorization.siwe_message,
       siwe_signature: authorization.siwe_signature,
       paymentRequired: quote.payment_requirement,
+      payment_id: state.payment_id,
     },
     authorization.capability,
   );
@@ -799,6 +837,8 @@ export async function completeAutopayForDepositQuote(
     status: "approved",
     payment_id: state.payment_id,
     autopay_request_id: state.autopay_request_id,
+    worker_autopay_request_id: state.autopay_request_id,
+    autopay_url: state.autopay_url,
     owner,
     payment_payload: payBody.payment_payload,
     selected_requirement: payBody.selected_requirement,
@@ -832,6 +872,38 @@ async function markAutopaySettled(
   )
     .bind(new Date().toISOString(), id)
     .run();
+}
+
+export async function reportAutopaySettlement(
+  env: Env,
+  input: SettlementReportInput,
+): Promise<void> {
+  if (!input.autopayUrl || !input.txHash) return;
+  const url = `${normalizeAutopayUrl(input.autopayUrl)}/api/settlement-reports`;
+  const bodyText = JSON.stringify({
+    version: 1,
+    autopay_request_id: input.autopayRequestId,
+    payment_id: input.paymentId,
+    invoice_id: input.invoiceId,
+    status: input.status,
+    amount: input.amount,
+    tx_hash: input.txHash,
+    settled_at: input.settledAt,
+  });
+  try {
+    const headers = await signedSettlementReportHeaders(env, url, bodyText);
+    const response = await fetch(url, {
+      method: "POST",
+      headers,
+      body: bodyText,
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      console.warn("[autopay settlement report] failed", response.status, text.slice(0, 500));
+    }
+  } catch (error) {
+    console.warn("[autopay settlement report] error", error);
+  }
 }
 
 export async function fetchAutopayPayerAddress(
@@ -945,6 +1017,7 @@ async function settleInvoicePayment(
   paymentPayload: unknown,
   devProof?: string,
   capabilityCharge?: CapabilityBudgetCharge,
+  settlementReport?: Pick<SettlementReportInput, "autopayUrl" | "autopayRequestId">,
 ): Promise<{ ok: boolean; status: number; body: Record<string, unknown> }> {
   const payment = await env.DB.prepare(
     `SELECT p.id, p.amount, p.currency, p.status, p.payment_requirement_json, i.status AS invoice_status
@@ -1084,6 +1157,16 @@ async function settleInvoicePayment(
     batch.push(deductCapabilityBudgetStatement(env, capabilityCharge));
   }
   await env.DB.batch(batch);
+  await reportAutopaySettlement(env, {
+    autopayUrl: settlementReport?.autopayUrl,
+    autopayRequestId: settlementReport?.autopayRequestId,
+    paymentId,
+    invoiceId,
+    status: "settled",
+    amount: formatMoney(payment.amount),
+    txHash: settlement.txHash,
+    settledAt: now,
+  });
 
   return {
     ok: true,
@@ -1093,6 +1176,7 @@ async function settleInvoicePayment(
       payment_id: paymentId,
       status: "paid",
       amount: formatMoney(payment.amount),
+      tx_hash: settlement.txHash ?? null,
     },
   };
 }
@@ -1105,6 +1189,7 @@ async function settleRechargePaymentForInvoice(
   paymentPayload: unknown,
   devProof?: string,
   capabilityCharge?: CapabilityBudgetCharge,
+  settlementReport?: Pick<SettlementReportInput, "autopayUrl" | "autopayRequestId">,
 ): Promise<{ ok: boolean; status: number; body: Record<string, unknown> }> {
   const payment = await env.DB.prepare(
     `SELECT id, amount, currency, status, payment_requirement_json
@@ -1250,6 +1335,16 @@ async function settleRechargePaymentForInvoice(
     batch.push(deductCapabilityBudgetStatement(env, capabilityCharge));
   }
   await env.DB.batch(batch);
+  await reportAutopaySettlement(env, {
+    autopayUrl: settlementReport?.autopayUrl,
+    autopayRequestId: settlementReport?.autopayRequestId,
+    paymentId,
+    invoiceId,
+    status: "settled",
+    amount: formatMoney(payment.amount),
+    txHash: settlement.txHash,
+    settledAt: now,
+  });
 
   const invoice = await env.DB.prepare(
     `SELECT amount_due, currency FROM meteria402_invoices WHERE id = ? AND account_id = ?`,
@@ -1284,6 +1379,7 @@ async function settleRechargePaymentForInvoice(
       status: paid.ok ? "paid" : "unpaid",
       recharge_amount: formatMoney(payment.amount),
       amount: formatMoney(invoice.amount_due),
+      tx_hash: settlement.txHash ?? null,
     },
   };
 }
@@ -1695,6 +1791,7 @@ async function callAutopayPay(
 async function tryAutopayWithCapability(
   env: Env,
   accountId: string,
+  paymentId: string,
   paymentRequirementJson: string,
   amount: number,
 ): Promise<{
@@ -1702,6 +1799,7 @@ async function tryAutopayWithCapability(
   headers: Record<string, string>;
   capability_id: string;
   capability_amount: number;
+  autopay_url?: string;
 } | null> {
   const capability = await getActiveAutopayCapability(env, accountId, amount);
   if (!capability) return null;
@@ -1714,6 +1812,7 @@ async function tryAutopayWithCapability(
       `${capability.autopay_url}/api/pay`,
       {
         paymentRequired: JSON.parse(paymentRequirementJson),
+        payment_id: paymentId,
         siweMessage: capability.siwe_message,
         siweSignature: capability.siwe_signature,
       },
@@ -1734,6 +1833,7 @@ async function tryAutopayWithCapability(
       headers: (body.headers as Record<string, string>) || {},
       capability_id: capability.id,
       capability_amount: amount,
+      autopay_url: capability.autopay_url,
     };
   } catch (error) {
     console.warn("Capability pay error", error);
@@ -1791,6 +1891,7 @@ export async function tryAutopayRecharge(
   const capResult = await tryAutopayWithCapability(
     env,
     accountId,
+    paymentId,
     JSON.stringify(requirement),
     rechargeAmount,
   );
@@ -1861,6 +1962,14 @@ export async function tryAutopayRecharge(
       now,
     ),
   ]);
+  await reportAutopaySettlement(env, {
+    autopayUrl: capResult.autopay_url,
+    paymentId,
+    status: "settled",
+    amount: formatMoney(rechargeAmount),
+    txHash: settlement.txHash,
+    settledAt: now,
+  });
 
   return { ok: true, rechargeAmount };
 }
