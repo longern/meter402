@@ -41,6 +41,7 @@ export default function KeysView({
   apiKeys,
   isBusy,
   busy,
+  loading,
   loadApiKeys,
   openCreateKeyDialog,
   disableApiKey,
@@ -218,7 +219,7 @@ export default function KeysView({
             className="icon-button plain"
             type="button"
             aria-label="Refresh API keys"
-            disabled={busy === "loadApiKeys"}
+            disabled={loading.apiKeys}
             onClick={loadApiKeys}
           >
             <RefreshIcon />

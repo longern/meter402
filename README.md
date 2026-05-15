@@ -1,12 +1,12 @@
 # Meteria402
 
-`Meteria402` is a Cloudflare Workers starter for anonymous, deposit-backed, OpenAI-compatible AI API billing with x402 payments.
+`Meteria402` is a Cloudflare Workers gateway that turns AI API usage into x402 payments. It exposes OpenAI-compatible and provider-native routes through Cloudflare AI Gateway, tracks usage in D1, gates requests with deposit-backed accounts and invoices, and supports wallet-based login plus scoped autopay settlement.
 
 The intended flow is:
 
 ```text
 Client / provider SDK
-  -> /v1/chat/completions
+  -> /v1/*, /compat/*, or provider-native routes
   -> Meteria402 account and invoice checks
   -> Cloudflare AI Gateway provider endpoint
   -> usage-based invoice creation
@@ -23,10 +23,10 @@ This implementation includes:
 - Provider SDK endpoint proxying through Cloudflare AI Gateway.
 - Usage-based invoice creation after successful requests.
 - Blocking of new model requests when an unpaid invoice exists.
-- Optional payment-worker integration for deposit and invoice settlement.
+- Optional autopay-worker integration for deposit and invoice settlement.
 - A minimal same-origin `/console` page for deposit setup and account inspection.
 
-This version intentionally keeps Durable Objects out of the MVP. D1 is the source of truth, with conditional updates used for request gating.
+D1 is the billing source of truth. Durable Objects are used only for short-lived login coordination and account request gates.
 
 ## Pages
 
@@ -84,7 +84,13 @@ Copy the returned database ID into `wrangler.toml`, then apply migrations:
 npm run db:migrate:local
 ```
 
-Set required secrets:
+For a deployed D1 database, apply the same migrations remotely:
+
+```bash
+npm run db:migrate:remote
+```
+
+Set required secrets for deployed usage:
 
 ```bash
 wrangler secret put CLOUDFLARE_ACCOUNT_ID
@@ -156,15 +162,19 @@ Do not enable development payments in production. The proof must be a local secr
 
 ## API
 
+This is the main route surface exposed by the Worker.
+
 ### Authentication
 
 - `GET /api/session` — Returns the current session identity (owner address and expiry) or `null`.
 - `POST /api/login/challenge` — Creates a short-lived main-site wallet login challenge.
 - `POST /api/login/complete` — Verifies the wallet signature and sets the session cookie.
 - `POST /api/login/scan/start` — Creates a QR/deeplink login request backed by a Durable Object.
+- `GET /api/login/scan/:id/details` — Get public scan-login request details.
 - `GET /api/login/scan/:id/events` — Hibernatable WebSocket stream for scan-login status.
 - `POST /api/login/scan/:id/challenge` — Creates the wallet-page challenge for a scan login.
 - `POST /api/login/scan/:id/approve` — Verifies the wallet-page signature and approves the scan login.
+- `POST /api/login/scan/:id/deny` — Rejects a pending scan login request.
 - `POST /api/login/scan/:id/complete` — Completes the desktop browser login after approval.
 - `POST /api/logout` — Clears the session cookie.
 - `POST /api/session/autopay` — Updates the account autopay endpoint stored in D1.
@@ -172,12 +182,18 @@ Do not enable development payments in production. The proof must be a local secr
 ### Deposits
 
 - `POST /api/deposits/quote` — Create a refundable deposit quote.
+- `GET /api/deposits/intent` — Load a signed deposit intent for standalone payment pages.
 - `POST /api/deposits/settle` — Settle a deposit via x402 (browser wallet, mobile deep-link, or dev bypass).
+- `POST /api/deposits/:id/autopay/start` — Start autopay settlement for a deposit quote.
+- `POST /api/deposits/:id/autopay/complete` — Complete autopay settlement for a deposit quote.
 - `GET /api/deposits` — List your deposit history.
 
 ### Account
 
 - `GET /api/account` — Get deposit balance, unpaid invoice total, and status.
+- `PATCH /api/account` — Update account settings, including minimum autopay recharge amount.
+- `POST /api/account/owner-rebind/challenge` — Create an owner-wallet rebind challenge.
+- `POST /api/account/owner-rebind/complete` — Complete an owner-wallet rebind.
 - `GET /api/api-keys` — List API keys.
 - `POST /api/api-keys` — Create a new API key.
 - `POST /api/api-keys/:id/disable` — Disable an API key.
@@ -185,6 +201,8 @@ Do not enable development payments in production. The proof must be a local secr
 - `DELETE /api/api-keys/:id` — Soft-delete an API key.
 - `GET /api/invoices` — List invoices.
 - `GET /api/requests` — List model calls / usage records.
+- `POST /api/reconcile` — Manually trigger pending AI Gateway usage reconciliation.
+- `POST /api/refund` — Request a refund settlement.
 
 ### Invoice Payment
 

@@ -11,6 +11,8 @@ import RechargeView from "./views/RechargeView";
 import UsageView from "./views/UsageView";
 import AutopayView from "./views/AutopayView";
 import SettingsView from "./views/SettingsView";
+import useConsoleBusy from "./hooks/useConsoleBusy";
+import useConsoleData from "./hooks/useConsoleData";
 import { normalizeApiError } from "./apiError";
 import {
   readableError,
@@ -59,10 +61,6 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
   const [keyDialogError, setKeyDialogError] = useState("");
   const [paymentDialog, setPaymentDialog] = useState(null);
   const [paymentPayload, setPaymentPayload] = useState("");
-  const [autopayWalletBalance, setAutopayWalletBalance] = useState(null);
-  const [autopayWalletBalanceError, setAutopayWalletBalanceError] = useState("");
-  const [capabilities, setCapabilities] = useState([]);
-  const [capabilitiesLoading, setCapabilitiesLoading] = useState(false);
   const [capCreateOpen, setCapCreateOpen] = useState(false);
   const [capTotalBudget, setCapTotalBudget] = useState("5.00");
   const [capMaxSingleAmount, setCapMaxSingleAmount] = useState("5.00");
@@ -72,19 +70,62 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
   const capAbortRef = useRef(null);
   const [editEndpointOpen, setEditEndpointOpen] = useState(false);
   const [depositDialogOpen, setDepositDialogOpen] = useState(false);
-  const [account, setAccount] = useState(null);
   const { t } = useI18n();
-  const [accountMissing, setAccountMissing] = useState(false);
-  const [apiKeys, setApiKeys] = useState([]);
-  const [lastInvoices, setLastInvoices] = useState([]);
-  const [deposits, setDeposits] = useState([]);
-  const [depositsLoading, setDepositsLoading] = useState(false);
-  const [requests, setRequests] = useState([]);
-  const [requestsCursor, setRequestsCursor] = useState(null);
-  const [requestsPrevCursors, setRequestsPrevCursors] = useState([]);
-  const [requestsNextCursor, setRequestsNextCursor] = useState(null);
   const [output, setOutput] = useState("");
-  const [busy, setBusy] = useState("");
+  const {
+    busy,
+    setBusy,
+    loading,
+    setLoadingFlag,
+    withBusy,
+    isMutating,
+  } = useConsoleBusy({
+    onBusyError(label, error) {
+      show(readableError(error));
+      if (label === "walletPayment") {
+        setPaymentDialog((current) => current ? { ...current, status: "failed", error: readableError(error) } : current);
+      }
+      if (label === "createCapability") {
+        setCapDialog((current) => current ? { ...current, status: "failed", error: readableError(error) } : current);
+      }
+    },
+  });
+  const {
+    account,
+    setAccount,
+    accountMissing,
+    apiKeys,
+    setApiKeys,
+    lastInvoices,
+    setLastInvoices,
+    deposits,
+    depositsLoading,
+    requests,
+    requestsPrevCursors,
+    requestsNextCursor,
+    autopayWalletBalance,
+    setAutopayWalletBalance,
+    autopayWalletBalanceError,
+    setAutopayWalletBalanceError,
+    capabilities,
+    capabilitiesLoading,
+    loadAccount,
+    loadAutopayWalletBalance,
+    loadApiKeys,
+    loadInvoices,
+    loadDeposits,
+    loadRequests,
+    loadPreviousRequestsPage,
+    loadNextRequestsPage,
+    loadCapabilities,
+  } = useConsoleData({
+    request,
+    show,
+    identityOwner: identity?.owner,
+    defaultAutopayUrl: DEFAULT_AUTOPAY_URL,
+    setAutopayUrl,
+    setLoadingFlag,
+  });
 
   useEffect(() => {
     function handlePopState() {
@@ -164,38 +205,6 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
     return json;
   }
 
-  async function withBusy(label, fn) {
-    setBusy(label);
-    try {
-      await fn();
-    } catch (error) {
-      show(readableError(error));
-      if (label === "walletPayment") {
-        setPaymentDialog((current) => current ? { ...current, status: "failed", error: readableError(error) } : current);
-      }
-      if (label === "createCapability") {
-        setCapDialog((current) => current ? { ...current, status: "failed", error: readableError(error) } : current);
-      }
-    } finally {
-      setBusy("");
-    }
-  }
-
-  async function loadAutopayWalletBalance(accountSnapshot = account) {
-    if (!identity?.owner || !accountSnapshot?.autopay_url) return;
-    setBusy("loadWalletBalance");
-    setAutopayWalletBalanceError("");
-    try {
-      const json = await request("/api/autopay-wallet/balance");
-      setAutopayWalletBalance(json);
-    } catch (error) {
-      setAutopayWalletBalance(null);
-      setAutopayWalletBalanceError(readableError(error));
-    } finally {
-      setBusy("");
-    }
-  }
-
   async function updateAutopayEndpoint() {
     await withBusy("updateAutopay", async () => {
       const json = await request("/api/session/autopay", {
@@ -211,18 +220,6 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
         await loadAutopayWalletBalance({ ...(account || {}), autopay_url: json.autopay_url });
       }
     });
-  }
-
-  async function loadCapabilities() {
-    setCapabilitiesLoading(true);
-    try {
-      const json = await request("/api/autopay/capabilities");
-      setCapabilities(json.capabilities || []);
-    } catch (error) {
-      show(readableError(error));
-    } finally {
-      setCapabilitiesLoading(false);
-    }
   }
 
   async function createCapability(event) {
@@ -323,48 +320,6 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
     }
   }
 
-  async function loadAccount() {
-    setBusy("loadAccount");
-    try {
-      const json = await request("/api/account");
-      setAccount(json);
-      setAutopayUrl(json.autopay_url || DEFAULT_AUTOPAY_URL);
-      setAccountMissing(false);
-      show(json);
-      return json;
-    } catch (error) {
-      if (isAccountNotFound(error)) {
-        setAccount(null);
-        setAccountMissing(true);
-        setDeposits([]);
-        setApiKeys([]);
-        setRequests([]);
-        setRequestsCursor(null);
-        setRequestsPrevCursors([]);
-        setRequestsNextCursor(null);
-        setLastInvoices([]);
-        setCapabilities([]);
-        setAutopayWalletBalance(null);
-        setAutopayWalletBalanceError("");
-        show({ status: "account_activation_required", owner: identity?.owner });
-        return null;
-      } else {
-        show(readableError(error));
-        return null;
-      }
-    } finally {
-      setBusy("");
-    }
-  }
-
-  async function loadApiKeys() {
-    await withBusy("loadApiKeys", async () => {
-      const json = await request("/api/api-keys");
-      setApiKeys(json.api_keys || []);
-      show(json);
-    });
-  }
-
   function openCreateKeyDialog() {
     setNewApiKey("");
     setKeyDialogError("");
@@ -461,53 +416,6 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
       show(json);
       await loadApiKeys();
     });
-  }
-
-  async function loadInvoices() {
-    await withBusy("loadInvoices", async () => {
-      const json = await request("/api/invoices");
-      setLastInvoices(json.invoices || []);
-      show(json);
-    });
-  }
-
-  async function loadDeposits() {
-    setDepositsLoading(true);
-    try {
-      const json = await request("/api/deposits");
-      setDeposits(json.deposits || []);
-      show(json);
-    } catch (error) {
-      show(readableError(error));
-    } finally {
-      setDepositsLoading(false);
-    }
-  }
-
-  async function loadRequests(cursor = null, prevCursors = []) {
-    await withBusy("loadRequests", async () => {
-      const url = cursor
-        ? `/api/requests?cursor=${encodeURIComponent(cursor)}`
-        : "/api/requests";
-      const json = await request(url);
-      setRequests(json.requests || []);
-      setRequestsCursor(cursor);
-      setRequestsPrevCursors(prevCursors);
-      setRequestsNextCursor(json.next_cursor || null);
-      show(json);
-    });
-  }
-
-  function loadPreviousRequestsPage() {
-    if (!requestsPrevCursors.length) return;
-    const nextPrevCursors = requestsPrevCursors.slice(0, -1);
-    const previousCursor = requestsPrevCursors[requestsPrevCursors.length - 1];
-    loadRequests(previousCursor, nextPrevCursors);
-  }
-
-  function loadNextRequestsPage() {
-    if (!requestsNextCursor) return;
-    loadRequests(requestsNextCursor, [...requestsPrevCursors, requestsCursor]);
   }
 
   async function autopayInvoice() {
@@ -674,8 +582,6 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
     if (url) window.open(url, "_blank", "noopener,noreferrer");
   }
 
-  const isBusy = Boolean(busy);
-
   async function logout() {
     try {
       await fetchJson("/api/logout", { method: "POST" });
@@ -780,7 +686,7 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
         {accountMissing ? (
           <ActivationView
             identity={identity}
-            isBusy={isBusy}
+            isBusy={isMutating}
             openDepositDialog={openDepositDialog}
             depositDialogOpen={depositDialogOpen}
             closeDepositDialog={closeDepositDialog}
@@ -800,8 +706,8 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
             identity={identity}
             autopayWalletBalance={autopayWalletBalance}
             autopayWalletBalanceError={autopayWalletBalanceError}
-            isBusy={isBusy}
-            busy={busy}
+            isBusy={isMutating}
+            loading={loading}
             loadAccount={loadAccount}
             loadDeposits={loadDeposits}
             loadAutopayWalletBalance={loadAutopayWalletBalance}
@@ -827,8 +733,9 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
         {!accountMissing && activeView === "keys" && (
           <KeysView
             apiKeys={apiKeys}
-            isBusy={isBusy}
+            isBusy={isMutating}
             busy={busy}
+            loading={loading}
             loadApiKeys={loadApiKeys}
             openCreateKeyDialog={openCreateKeyDialog}
             disableApiKey={disableApiKey}
@@ -854,8 +761,8 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
           <UsageView
             requests={requests}
             lastInvoices={lastInvoices}
-            isBusy={isBusy}
-            busy={busy}
+            isBusy={isMutating}
+            loading={loading}
             loadRequests={loadRequests}
             loadPreviousRequestsPage={loadPreviousRequestsPage}
             loadNextRequestsPage={loadNextRequestsPage}
@@ -871,7 +778,7 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
           <AutopayView
             capabilities={capabilities}
             capabilitiesLoading={capabilitiesLoading}
-            isBusy={isBusy}
+            isBusy={isMutating}
             busy={busy}
             loadCapabilities={loadCapabilities}
             openCapCreate={openCapCreate}
@@ -896,7 +803,7 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
           <SettingsView
             identity={identity}
             account={account}
-            isBusy={isBusy}
+            isBusy={isMutating}
             busy={busy}
             request={request}
             show={show}
@@ -961,10 +868,6 @@ function ActivationView({
       )}
     </>
   );
-}
-
-function isAccountNotFound(error) {
-  return error && typeof error === "object" && error.code === "account_not_found";
 }
 
 async function fetchSession() {

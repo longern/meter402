@@ -6,7 +6,8 @@ The payment requester creates a short-lived authorization request, shows the ret
 
 ## Security model
 
-- The x402 payer hot wallet private key is stored as a Cloudflare Worker secret.
+- Account-specific x402 payer hot wallet private keys are stored in D1 encrypted with `AUTOPAY_SECRET`.
+- `AUTOPAY_ADMIN_PRIVATE_KEY` is only the admin fallback payer key when an owner has no account-specific wallet configured.
 - The owner wallet signs SIWE authorization messages. The owner wallet does not pay x402 requests directly.
 - Owners are allowed when they are the configured admin owner or have an `autopay_accounts` record.
 - Each authorization request is short-lived and stored in a Durable Object session.
@@ -14,6 +15,7 @@ The payment requester creates a short-lived authorization request, shows the ret
 - SIWE `Resources` bind the authorization to the capability, auth request ID, and optionally a payment requirement hash.
 - The capability limits requester wallet, origin, recipient, network, asset, max single payment, and policy expiration.
 - `/api/pay` requires an EIP-712 requester wallet proof bound to the request body and capability hash.
+- The worker creates the x402 payment payload, but final settlement truth comes from the requester/merchant after it verifies and commits settlement. `POST /api/settlement-reports` records that reported result on the worker audit row.
 - Only fund the hot wallet with a small amount of USDC.
 
 ## Configure
@@ -22,6 +24,19 @@ Install dependencies:
 
 ```bash
 npm install
+```
+
+Create the D1 audit database:
+
+```bash
+wrangler d1 create meteria402_autopay_audit
+```
+
+Copy the returned database ID into `wrangler.toml`, then apply migrations:
+
+```bash
+wrangler d1 migrations apply meteria402_autopay_audit --local
+wrangler d1 migrations apply meteria402_autopay_audit --remote
 ```
 
 Set the worker secret used for dashboard session cookies and encrypted account wallets:
@@ -43,6 +58,13 @@ AUTOPAY_ADMIN_OWNER = "0xAdminOwner"
 ```
 
 For EVM wallets this is normally an address, not a raw public key. The worker verifies SIWE signatures by recovering the signer address. `AUTOPAY_ADMIN_OWNER` can sign in to the dashboard and add account wallet mappings for other owners.
+
+## Dashboard
+
+- `/` serves the dashboard for wallet login, payer-wallet setup, and audit views.
+- `/authorize?request_id=...` serves the mobile-first SIWE approval page for a single authorization request.
+- Admin owners can add account-specific payer wallets from the dashboard.
+- Audit views show authorization requests and payment payload records. A payment is marked `confirmed` only after a trusted requester posts a settlement report.
 
 Run locally:
 
@@ -68,6 +90,12 @@ Run a local payment requester demo against a deployed autopay worker:
 AUTOPAY_URL=https://autopay.longern.com npm run requester-demo
 ```
 
+For a local autopay worker, use:
+
+```bash
+AUTOPAY_URL=http://localhost:8788 npm run requester-demo
+```
+
 Open:
 
 ```text
@@ -78,7 +106,9 @@ The demo simulates a paid API returning 402, creates an authorization request on
 
 ## Requester flow
 
-Create an authorization request after receiving a 402 response:
+Create an authorization request after receiving a 402 response. The `accepts`
+array below is abbreviated; a real request must include an `exact` x402 payment
+option so the worker can infer or validate the policy.
 
 ```http
 POST /api/auth/requests
@@ -192,6 +222,30 @@ owner-signed capability.
 
 Use the returned `headers` to retry the original paid request.
 
+After the requester verifies settlement and commits its own billing state, it
+can report the final result back to the worker:
+
+```http
+POST /api/settlement-reports
+Content-Type: application/json
+X-Requester-Account: eip155:8453:0xRequesterWallet
+X-Requester-Nonce: random-nonce
+X-Requester-Issued-At: 1770000000
+X-Requester-Expires-At: 1770000060
+X-Requester-Signature: 0x...
+
+{
+  "payment_id": "...",
+  "autopay_request_id": "...",
+  "status": "settled",
+  "tx_hash": "0x...",
+  "settled_at": "2026-05-14T00:00:00.000Z"
+}
+```
+
+The settlement report uses the same requester EIP-712 proof shape and updates
+the existing `autopay_payments` audit row to `confirmed`.
+
 ## Endpoints
 
 ```http
@@ -201,13 +255,22 @@ GET /api/account
 PUT /api/account/autopay-wallet
 GET /api/admin/accounts
 POST /api/admin/accounts
+GET /api/auth/challenge
+POST /api/auth/login
+POST /api/auth/logout
+GET /api/auth/me
 POST /api/auth/requests
 GET /api/auth/requests/{request_id}
+GET /api/auth/requests/{request_id}/details
 GET /api/auth/requests/{request_id}/poll
+GET /api/auth/requests/{request_id}/events
 POST /api/auth/requests/{request_id}/approve
 POST /api/auth/requests/{request_id}/deny
 POST /api/pay
+POST /api/settlement-reports
 POST /api/proxy
+GET /api/audit/authorizations
+GET /api/audit/payments
 ```
 
 `/api/proxy` accepts the same SIWE authorization as `/api/pay`, performs the target request, pays after a 402 response, and retries once.

@@ -130,7 +130,7 @@ export default function AutopayView({
             type="button"
             aria-label="Refresh autopay limits"
             title="Refresh autopay limits"
-            disabled={isBusy || capabilitiesLoading}
+            disabled={capabilitiesLoading}
             onClick={loadCapabilities}
           >
             <RefreshIcon />

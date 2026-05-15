@@ -25,7 +25,7 @@ export default function UsageView({
   requests,
   lastInvoices,
   isBusy,
-  busy,
+  loading,
   loadRequests,
   loadPreviousRequestsPage,
   loadNextRequestsPage,
@@ -92,7 +92,7 @@ export default function UsageView({
             className="icon-button plain"
             type="button"
             aria-label="Refresh model calls"
-            disabled={busy === "loadRequests"}
+            disabled={loading.requests}
             onClick={() => loadRequests()}
           >
             <RefreshIcon />
@@ -155,7 +155,7 @@ export default function UsageView({
             type="button"
             className="pagination-icon-button"
             aria-label="Previous page"
-            disabled={busy === "loadRequests" || !hasPreviousRequestsPage}
+            disabled={loading.requests || !hasPreviousRequestsPage}
             onClick={loadPreviousRequestsPage}
           >
             <ChevronIcon direction="left" />
@@ -165,7 +165,7 @@ export default function UsageView({
             type="button"
             className="pagination-icon-button"
             aria-label="Next page"
-            disabled={busy === "loadRequests" || !hasNextRequestsPage}
+            disabled={loading.requests || !hasNextRequestsPage}
             onClick={loadNextRequestsPage}
           >
             <ChevronIcon direction="right" />
@@ -180,7 +180,7 @@ export default function UsageView({
             className="icon-button plain"
             type="button"
             aria-label="Refresh invoices"
-            disabled={busy === "loadInvoices"}
+            disabled={loading.invoices}
             onClick={loadInvoices}
           >
             <RefreshIcon />

@@ -15,7 +15,7 @@ export default function RechargeView({
   autopayWalletBalance,
   autopayWalletBalanceError,
   isBusy,
-  busy,
+  loading,
   loadAccount,
   loadDeposits,
   loadAutopayWalletBalance,
@@ -141,8 +141,8 @@ export default function RechargeView({
               className="icon-button plain"
               type="button"
               aria-label="Refresh balance"
-              disabled={busy === "loadWalletBalance"}
-              onClick={loadAutopayWalletBalance}
+              disabled={loading.walletBalance}
+              onClick={() => loadAutopayWalletBalance()}
             >
               <RefreshIcon />
             </button>
