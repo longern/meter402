@@ -201,7 +201,11 @@ export default function AdminConsole({ identity, onSessionChange }) {
         </div>
 
         {error && <div className="admin-error-banner">{error}</div>}
-        {loading && <div className="admin-loading">{t("Loading...")}</div>}
+        {loading && (
+          <div className="admin-loading">
+            <span className="spinner" />
+          </div>
+        )}
 
         {activeView === "dashboard" && stats && (
           <div className="admin-dashboard">
@@ -234,7 +238,7 @@ export default function AdminConsole({ identity, onSessionChange }) {
           </div>
         )}
 
-        {activeView === "accounts" && accounts && (
+        {activeView === "accounts" && (
           <>
             <div className="admin-table-actions">
               <button
@@ -249,18 +253,20 @@ export default function AdminConsole({ identity, onSessionChange }) {
                 + {t("Add User")}
               </button>
             </div>
-            <AdminDataTable
-              columns={[
-                { key: "id", label: t("ID"), width: "200px" },
-                { key: "owner_address", label: t("Owner"), formatter: (v) => shortAddress(v) },
-                { key: "status", label: t("Status") },
-                { key: "deposit_balance", label: t("Deposit"), formatter: (v) => formatMoneyCompact(v) },
-                { key: "unpaid_invoice_total", label: t("Unpaid"), formatter: (v) => formatMoneyCompact(v) },
-                { key: "created_at", label: t("Created") },
-              ]}
-              rows={accounts.accounts || []}
-              total={accounts.total}
-            />
+            {accounts && (
+              <AdminDataTable
+                columns={[
+                  { key: "id", label: t("ID"), width: "200px" },
+                  { key: "owner_address", label: t("Owner"), formatter: (v) => shortAddress(v) },
+                  { key: "status", label: t("Status") },
+                  { key: "deposit_balance", label: t("Deposit"), formatter: (v) => formatMoneyCompact(v) },
+                  { key: "unpaid_invoice_total", label: t("Unpaid"), formatter: (v) => formatMoneyCompact(v) },
+                  { key: "created_at", label: t("Created") },
+                ]}
+                rows={accounts.accounts || []}
+                total={accounts.total}
+              />
+            )}
           </>
         )}
 

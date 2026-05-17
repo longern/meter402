@@ -80,10 +80,19 @@
 }
 
 .admin-loading {
-  color: #6b7280;
-  font-size: 14px;
-  padding: 40px 0;
-  text-align: center;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 60px 0;
+}
+
+.admin-loading .spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid #e5e7eb;
+  border-top-color: #7c3aed;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
 }
 
 .admin-dashboard {
