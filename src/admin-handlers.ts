@@ -94,18 +94,19 @@ export async function handleAdminListDeposits(
   const offset = parseInt(url.searchParams.get("offset") || "0", 10);
 
   const deposits = await env.DB.prepare(
-    `SELECT d.id, d.account_id, d.amount, d.currency, d.status,
-            d.settled_at, d.created_at, a.owner_address
-     FROM meteria402_deposits d
-     JOIN meteria402_accounts a ON a.id = d.account_id
-     ORDER BY d.created_at DESC
+    `SELECT p.id, p.account_id, p.amount, p.currency, p.status,
+            p.settled_at, p.created_at, a.owner_address
+     FROM meteria402_payments p
+     JOIN meteria402_accounts a ON a.id = p.account_id
+     WHERE p.kind = 'deposit'
+     ORDER BY p.created_at DESC
      LIMIT ? OFFSET ?`,
   )
     .bind(limit, offset)
     .all();
 
   const total = await env.DB.prepare(
-    `SELECT COUNT(*) as total FROM meteria402_deposits`,
+    `SELECT COUNT(*) as total FROM meteria402_payments WHERE kind = 'deposit'`,
   )
     .first<{ total: number }>();
 
@@ -128,7 +129,7 @@ export async function handleAdminListInvoices(
   const offset = parseInt(url.searchParams.get("offset") || "0", 10);
 
   const invoices = await env.DB.prepare(
-    `SELECT i.id, i.account_id, i.amount, i.status, i.settled_at,
+    `SELECT i.id, i.account_id, i.amount_due as amount, i.status, i.paid_at as settled_at,
             i.created_at, a.owner_address
      FROM meteria402_invoices i
      JOIN meteria402_accounts a ON a.id = i.account_id
@@ -162,12 +163,12 @@ export async function handleAdminListRequests(
   const offset = parseInt(url.searchParams.get("offset") || "0", 10);
 
   const reqs = await env.DB.prepare(
-    `SELECT r.id, r.account_id, r.api_key_id, r.provider, r.model,
-            r.input_tokens, r.output_tokens, r.cost, r.created_at,
+    `SELECT r.id, r.account_id, r.api_key_id, r.model as provider, r.model,
+            r.input_tokens, r.output_tokens, r.final_cost as cost, r.started_at as created_at,
             a.owner_address
      FROM meteria402_requests r
      JOIN meteria402_accounts a ON a.id = r.account_id
-     ORDER BY r.created_at DESC
+     ORDER BY r.started_at DESC
      LIMIT ? OFFSET ?`,
   )
     .bind(limit, offset)
@@ -199,7 +200,7 @@ export async function handleAdminStats(
       (SELECT COUNT(*) FROM meteria402_api_keys WHERE revoked_at IS NULL AND deleted_at IS NULL) as active_keys,
       (SELECT SUM(deposit_balance) FROM meteria402_accounts) as total_deposits,
       (SELECT SUM(unpaid_invoice_total) FROM meteria402_accounts) as total_unpaid,
-      (SELECT COUNT(*) FROM meteria402_requests WHERE created_at > datetime('now', '-24 hours')) as requests_24h`,
+      (SELECT COUNT(*) FROM meteria402_requests WHERE started_at > datetime('now', '-24 hours')) as requests_24h`,
   )
     .first<{
       total_accounts: number;
