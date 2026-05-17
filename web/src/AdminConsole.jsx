@@ -14,6 +14,7 @@ export default function AdminConsole({ identity, onSessionChange }) {
   const [deposits, setDeposits] = useState(null);
   const [invoices, setInvoices] = useState(null);
   const [requests, setRequests] = useState(null);
+  const [settings, setSettings] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
@@ -28,6 +29,7 @@ export default function AdminConsole({ identity, onSessionChange }) {
     { view: "deposits", label: t("Deposits"), icon: "💰" },
     { view: "invoices", label: t("Invoices"), icon: "📄" },
     { view: "requests", label: t("Requests"), icon: "📡" },
+    { view: "settings", label: t("Settings"), icon: "⚙️" },
   ];
 
   async function request(path, options = {}) {
@@ -69,6 +71,17 @@ export default function AdminConsole({ identity, onSessionChange }) {
     setRequests(data);
   }
 
+  async function loadSettings() {
+    const data = await request("/api/admin/settings");
+    setSettings(data.settings);
+  }
+
+  async function saveSettings(patch) {
+    const res = await request("/api/admin/settings", { method: "PATCH", body: JSON.stringify(patch) });
+    setSettings(res.settings);
+    return res;
+  }
+
   useEffect(() => {
     setLoading(true);
     setError("");
@@ -79,6 +92,7 @@ export default function AdminConsole({ identity, onSessionChange }) {
         if (activeView === "deposits") return loadDeposits();
         if (activeView === "invoices") return loadInvoices();
         if (activeView === "requests") return loadRequests();
+        if (activeView === "settings") return loadSettings();
       })
       .catch((err) => setError(readableError(err)))
       .finally(() => setLoading(false));
@@ -333,6 +347,15 @@ export default function AdminConsole({ identity, onSessionChange }) {
             t={t}
           />
         )}
+
+        {activeView === "settings" && (
+          <AdminSettingsPanel
+            settings={settings}
+            loading={loading}
+            onSave={saveSettings}
+            t={t}
+          />
+        )}
         <Modal
           open={createOpen}
           onClose={() => {
@@ -413,5 +436,75 @@ function AdminDataTable({ columns, rows, total, t }) {
         </table>
       </div>
     </>
+  );
+}
+
+function AdminSettingsPanel({ settings, loading, onSave, t }) {
+  const [form, setForm] = useState({});
+  const [saving, setSaving] = useState(false);
+  const [savedMsg, setSavedMsg] = useState("");
+
+  useEffect(() => {
+    if (settings) {
+      setForm({ ...settings });
+    }
+  }, [settings]);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setSaving(true);
+    setSavedMsg("");
+    try {
+      await onSave(form);
+      setSavedMsg(t("Saved"));
+      setTimeout(() => setSavedMsg(""), 2000);
+    } catch (err) {
+      setSavedMsg(err.message || t("Save failed"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="admin-loading">
+        <span className="spinner" />
+      </div>
+    );
+  }
+
+  if (!settings) return null;
+
+  const fields = [
+    { key: "default_min_deposit", label: t("Min Deposit"), type: "text", placeholder: "5.00" },
+    { key: "default_concurrency_limit", label: t("Concurrency Limit"), type: "number", placeholder: "8" },
+    { key: "default_autopay_min_recharge", label: t("Autopay Min Recharge"), type: "text", placeholder: "5.00" },
+    { key: "billing_cost_multiplier", label: t("Cost Multiplier"), type: "text", placeholder: "1.0" },
+  ];
+
+  return (
+    <form onSubmit={handleSubmit} className="admin-settings-form">
+      <div className="admin-settings-grid">
+        {fields.map((field) => (
+          <div key={field.key} className="admin-form-group">
+            <label htmlFor={`setting-${field.key}`}>{field.label}</label>
+            <input
+              id={`setting-${field.key}`}
+              type={field.type}
+              value={form[field.key] ?? ""}
+              placeholder={field.placeholder}
+              onChange={(e) => setForm((prev) => ({ ...prev, [field.key]: e.target.value }))}
+              disabled={saving}
+            />
+          </div>
+        ))}
+      </div>
+      <div className="admin-form-actions">
+        {savedMsg && <span className={`form-status ${savedMsg === t("Saved") ? "success" : "error"}`}>{savedMsg}</span>}
+        <button type="submit" className="primary" disabled={saving}>
+          {saving ? "..." : t("Save")}
+        </button>
+      </div>
+    </form>
   );
 }

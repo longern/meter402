@@ -58,6 +58,8 @@ export type RouteHandlers = {
   handleAdminListInvoices: Handler;
   handleAdminListRequests: Handler;
   handleAdminStats: Handler;
+  handleAdminListSettings: Handler;
+  handleAdminUpdateSettings: Handler;
   handleV1Request: (
     request: Request,
     env: Env,
@@ -326,6 +328,12 @@ async function dispatchAdminRoute(
   }
   if (method === "GET" && pathname === "/api/admin/requests") {
     return handlers.handleAdminListRequests(request, env);
+  }
+  if (method === "GET" && pathname === "/api/admin/settings") {
+    return handlers.handleAdminListSettings(request, env);
+  }
+  if (method === "PATCH" && pathname === "/api/admin/settings") {
+    return handlers.handleAdminUpdateSettings(request, env);
   }
 
   return null;

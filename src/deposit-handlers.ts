@@ -2,6 +2,7 @@ import { getAccountByOwner } from "./accounts";
 import { createApiKey, randomApiKeyName } from "./api-keys";
 import { normalizeAutopayUrl } from "./autopay";
 import { makeId, sha256Hex } from "./crypto";
+import { getSettingWithFallback } from "./settings";
 import {
   errorResponse,
   HttpError,
@@ -48,8 +49,9 @@ export async function handleDepositQuote(
       ? normalizeAutopayUrl(body.autopay_url ?? body.autopayUrl)
       : "";
   const autopayUrl = account?.autopay_url || requestedAutopayUrl;
+  const defaultMinDeposit = await getSettingWithFallback(env.DB, "default_min_deposit", env.DEFAULT_MIN_DEPOSIT);
   const amount = parseMoney(
-    String(body.amount ?? env.DEFAULT_MIN_DEPOSIT ?? "5.00"),
+    String(body.amount ?? defaultMinDeposit),
   );
   if (amount <= 0) {
     return errorResponse(
@@ -370,9 +372,11 @@ export async function handleDepositSettle(
     );
   }
 
-  const minDeposit = parseMoney(env.DEFAULT_MIN_DEPOSIT ?? "5.00");
+  const minDepositStr = await getSettingWithFallback(env.DB, "default_min_deposit", env.DEFAULT_MIN_DEPOSIT);
+  const concurrencyLimitStr = await getSettingWithFallback(env.DB, "default_concurrency_limit", env.DEFAULT_CONCURRENCY_LIMIT);
+  const minDeposit = parseMoney(minDepositStr);
   const concurrencyLimit = parsePositiveInt(
-    env.DEFAULT_CONCURRENCY_LIMIT ?? "8",
+    concurrencyLimitStr,
     8,
   );
 

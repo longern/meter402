@@ -4,6 +4,7 @@ import type { Env } from "./types";
 import { isAdminWallet } from "./accounts";
 import { makeId } from "./crypto";
 import { parseMoney, parsePositiveInt } from "./money";
+import { getSettingWithFallback, listSettings, setSetting, ensureSettingsDefaults } from "./settings";
 
 export async function requireAdmin(
   request: Request,
@@ -45,8 +46,11 @@ export async function handleAdminCreateAccount(
 
   const now = new Date().toISOString();
   const accountId = makeId("acct");
-  const concurrencyLimit = parsePositiveInt(env.DEFAULT_CONCURRENCY_LIMIT || "3", 3);
-  const minDepositRequired = parseMoney(env.DEFAULT_MIN_DEPOSIT || "5.00");
+
+  const concurrencyLimitStr = await getSettingWithFallback(env.DB, "default_concurrency_limit", env.DEFAULT_CONCURRENCY_LIMIT);
+  const minDepositStr = await getSettingWithFallback(env.DB, "default_min_deposit", env.DEFAULT_MIN_DEPOSIT);
+  const concurrencyLimit = parsePositiveInt(concurrencyLimitStr, 3);
+  const minDepositRequired = parseMoney(minDepositStr);
 
   await env.DB.prepare(
     `INSERT INTO meteria402_accounts
@@ -270,4 +274,32 @@ export async function handleAdminStats(
     total_unpaid: 0,
     requests_24h: 0,
   });
+}
+
+export async function handleAdminListSettings(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  await requireAdmin(request, env);
+  await ensureSettingsDefaults(env.DB);
+  const settings = await listSettings(env.DB);
+  return jsonResponse({ settings });
+}
+
+export async function handleAdminUpdateSettings(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  await requireAdmin(request, env);
+  const body = await request.json<Record<string, unknown>>();
+  const updates: Record<string, string> = {};
+  for (const [key, value] of Object.entries(body)) {
+    if (value === null || value === undefined) continue;
+    updates[key] = String(value);
+  }
+  for (const [key, value] of Object.entries(updates)) {
+    await setSetting(env.DB, key, value);
+  }
+  const settings = await listSettings(env.DB);
+  return jsonResponse({ settings, updated: Object.keys(updates) });
 }

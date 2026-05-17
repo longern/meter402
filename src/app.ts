@@ -21,6 +21,8 @@ handleAdminListDeposits,
 handleAdminListInvoices,
 handleAdminListRequests,
 handleAdminStats,
+handleAdminListSettings,
+handleAdminUpdateSettings,
 } from "./admin-handlers";
 import {
 handleCompleteAutopayCapability,
@@ -101,6 +103,8 @@ export const routeHandlers: RouteHandlers = {
   handleAdminListInvoices,
   handleAdminListRequests,
   handleAdminStats,
+  handleAdminListSettings,
+  handleAdminUpdateSettings,
   handleV1Request,
 };
 
