@@ -7,7 +7,6 @@ import {
 import { makeId } from "./crypto";
 import { HttpError } from "./http";
 import {
-  formatMoney,
   parsePositiveInt,
 } from "./money";
 import type { Env, PaymentRequirement } from "./types";
@@ -171,7 +170,7 @@ export function createPaymentRequirementFromValues(
           service: "meteria402",
           kind: input.kind,
           id: input.id,
-          amount_decimal: formatMoney(input.amount),
+          amount_decimal: input.amount,
           currency: getX402AssetSymbol(env),
         },
       },

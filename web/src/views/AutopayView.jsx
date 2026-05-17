@@ -14,6 +14,7 @@ import {
   shortAddress,
   buildCoinbaseWalletLink,
   buildOkxWalletLink,
+  formatMoneyCompact,
 } from "../utils";
 
 export default function AutopayView({
@@ -160,9 +161,9 @@ export default function AutopayView({
                 <tbody>
                   {capabilities.map((item) => (
                     <tr key={item.id}>
-                      <td><strong>{item.total_budget} USDC</strong></td>
-                      <td className="numeric">{item.remaining_budget} USDC</td>
-                      <td className="numeric">{item.max_single_amount} USDC</td>
+                      <td><strong>{formatMoneyCompact(item.total_budget)}</strong></td>
+                      <td className="numeric">{formatMoneyCompact(item.remaining_budget)}</td>
+                      <td className="numeric">{formatMoneyCompact(item.max_single_amount)}</td>
                       <td>{renderCapabilityStatus(item.status)}</td>
                       <td>{item.valid_before ? formatDateTime(item.valid_before) : "Never"}</td>
                       <td className="mono">{shortAddress(item.owner_address)}</td>
@@ -180,11 +181,11 @@ export default function AutopayView({
                 <DataListItem className="autopay-mobile-item" key={item.id}>
                   <div className="autopay-mobile-main">
                     <div className="autopay-mobile-title-row">
-                      <strong>{item.total_budget} USDC limit</strong>
-                      <span className="autopay-mobile-remaining">{item.remaining_budget} left</span>
+                      <strong>{formatMoneyCompact(item.total_budget)} limit</strong>
+                      <span className="autopay-mobile-remaining">{formatMoneyCompact(item.remaining_budget)} left</span>
                     </div>
                     <div className="autopay-mobile-meta-row">
-                      <span>max {item.max_single_amount}/tx</span>
+                      <span>max {formatMoneyCompact(item.max_single_amount)}/tx</span>
                       <span className="mono">{shortAddress(item.owner_address)}</span>
                     </div>
                     <div className="autopay-mobile-status-row">

@@ -15,7 +15,7 @@ import {
   readJsonObject,
   requireString,
 } from "./http";
-import { formatMoney, parseMoney } from "./money";
+import { parsePositiveInt } from "./money";
 import {
   hashAutopayCapability,
   requesterMetadata,
@@ -71,7 +71,7 @@ type SettlementReportInput = {
   paymentId: string;
   invoiceId?: string | null;
   status: "settled";
-  amount: string;
+  amount: number;
   txHash?: string;
   settledAt: string;
 };
@@ -146,7 +146,7 @@ export async function handleInvoicePayQuote(
   return jsonResponse({
     payment_id: paymentId,
     invoice_id: invoice.id,
-    amount: formatMoney(invoice.amount_due),
+    amount: invoice.amount_due,
     currency: paymentCurrency,
     payment_requirement: requirement,
   });
@@ -251,7 +251,7 @@ export async function handleInvoiceAutopayStart(
       invoice_id: invoice.id,
       status: "settled",
       payment_method: "excess_deposit",
-      amount: formatMoney(invoice.amount_due),
+      amount: invoice.amount_due,
     });
   }
 
@@ -1052,7 +1052,7 @@ async function settleInvoicePayment(
         invoice_id: invoiceId,
         payment_id: paymentId,
         status: "paid",
-        amount: formatMoney(payment.amount),
+        amount: payment.amount,
       },
     };
   }
@@ -1163,7 +1163,7 @@ async function settleInvoicePayment(
     paymentId,
     invoiceId,
     status: "settled",
-    amount: formatMoney(payment.amount),
+    amount: payment.amount,
     txHash: settlement.txHash,
     settledAt: now,
   });
@@ -1175,7 +1175,7 @@ async function settleInvoicePayment(
       invoice_id: invoiceId,
       payment_id: paymentId,
       status: "paid",
-      amount: formatMoney(payment.amount),
+      amount: payment.amount,
       tx_hash: settlement.txHash ?? null,
     },
   };
@@ -1341,7 +1341,7 @@ async function settleRechargePaymentForInvoice(
     paymentId,
     invoiceId,
     status: "settled",
-    amount: formatMoney(payment.amount),
+    amount: payment.amount,
     txHash: settlement.txHash,
     settledAt: now,
   });
@@ -1377,8 +1377,8 @@ async function settleRechargePaymentForInvoice(
       invoice_id: invoiceId,
       payment_id: paymentId,
       status: paid.ok ? "paid" : "unpaid",
-      recharge_amount: formatMoney(payment.amount),
-      amount: formatMoney(invoice.amount_due),
+      recharge_amount: payment.amount,
+      amount: invoice.amount_due,
       tx_hash: settlement.txHash ?? null,
     },
   };
@@ -1395,7 +1395,7 @@ export async function handleRefundRequest(
       "unpaid_invoice",
       "All unpaid invoices must be paid before a refund can be requested.",
       {
-        unpaid_invoice_total: formatMoney(account.unpaid_invoice_total),
+        unpaid_invoice_total: account.unpaid_invoice_total,
       },
     );
   }
@@ -1421,7 +1421,7 @@ export async function handleRefundRequest(
   return jsonResponse({
     account_id: account.id,
     status: "refund_requested",
-    refundable_amount: formatMoney(account.deposit_balance),
+    refundable_amount: account.deposit_balance,
   });
 }
 
@@ -1461,10 +1461,10 @@ export async function handleListAutopayCapabilities(
       id: row.id,
       owner_address: row.owner_address,
       autopay_url: row.autopay_url,
-      max_single_amount: formatMoney(row.max_single_amount),
-      total_budget: formatMoney(row.total_budget),
-      spent_amount: formatMoney(row.spent_amount),
-      remaining_budget: formatMoney(remaining),
+      max_single_amount: row.max_single_amount,
+      total_budget: row.total_budget,
+      spent_amount: row.spent_amount,
+      remaining_budget: remaining,
       valid_before: row.valid_before,
       status: isRevoked
         ? "revoked"
@@ -1498,9 +1498,10 @@ export async function handleCreateAutopayCapability(
   const autopayUrl = normalizeAutopayUrl(
     body.autopay_url ?? account.autopay_url,
   );
-  const totalBudget = parseMoney(String(body.total_budget ?? "5.00"));
-  const maxSingleAmount = parseMoney(
-    String(body.max_single_amount ?? body.total_budget ?? "5.00"),
+  const totalBudget = parseInt(String(body.total_budget ?? "5000000"), 10);
+  const maxSingleAmount = parseInt(
+    String(body.max_single_amount ?? body.total_budget ?? "5000000"),
+    10,
   );
   const ttlDays =
     typeof body.ttl_days === "number"
@@ -1567,8 +1568,8 @@ export async function handleCreateAutopayCapability(
       websocket_uri_complete: websocketUriComplete,
       poll_token: pollToken,
       autopay_url: autopayUrl,
-      total_budget: formatMoney(totalBudget),
-      max_single_amount: formatMoney(maxSingleAmount),
+      total_budget: totalBudget,
+      max_single_amount: maxSingleAmount,
       valid_before: validBefore,
       ttl_days: ttlDays,
       message:
@@ -1682,9 +1683,10 @@ export async function handleCompleteAutopayCapability(
     );
   }
 
-  const totalBudget = parseMoney(String(body.total_budget ?? "5.00"));
-  const maxSingleAmount = parseMoney(
-    String(body.max_single_amount ?? body.total_budget ?? "5.00"),
+  const totalBudget = parseInt(String(body.total_budget ?? "5000000"), 10);
+  const maxSingleAmount = parseInt(
+    String(body.max_single_amount ?? body.total_budget ?? "5000000"),
+    10,
   );
   const validBefore =
     typeof capability.validBefore === "string"
@@ -1720,8 +1722,8 @@ export async function handleCompleteAutopayCapability(
       status: "active",
       owner_address: normalizeEvmAddress(owner),
       autopay_url: autopayUrl,
-      total_budget: formatMoney(totalBudget),
-      max_single_amount: formatMoney(maxSingleAmount),
+      total_budget: totalBudget,
+      max_single_amount: maxSingleAmount,
       valid_before: validBefore,
       created_at: now,
     },
@@ -1966,7 +1968,7 @@ export async function tryAutopayRecharge(
     autopayUrl: capResult.autopay_url,
     paymentId,
     status: "settled",
-    amount: formatMoney(rechargeAmount),
+    amount: rechargeAmount,
     txHash: settlement.txHash,
     settledAt: now,
   });

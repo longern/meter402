@@ -20,14 +20,14 @@ export default function SettingsView({
   const [submitting, setSubmitting] = useState(false);
   const [rebindOpen, setRebindOpen] = useState(false);
   const [minRechargeAmount, setMinRechargeAmount] = useState(
-    account?.autopay_min_recharge_amount || "0.01",
+    account?.autopay_min_recharge_amount ? String(Number(account.autopay_min_recharge_amount) / 1e6) : "0.01",
   );
   const [minRechargeStatus, setMinRechargeStatus] = useState("");
   const [savingMinRecharge, setSavingMinRecharge] = useState(false);
   const [minRechargeOpen, setMinRechargeOpen] = useState(false);
 
   useEffect(() => {
-    setMinRechargeAmount(account?.autopay_min_recharge_amount || "0.01");
+    setMinRechargeAmount(account?.autopay_min_recharge_amount ? String(Number(account.autopay_min_recharge_amount) / 1e6) : "0.01");
   }, [account?.autopay_min_recharge_amount]);
 
   async function rebindOwner(event) {
@@ -86,7 +86,7 @@ export default function SettingsView({
     try {
       const result = await request("/api/account", {
         method: "PATCH",
-        body: JSON.stringify({ autopay_min_recharge_amount: normalizedAmount }),
+        body: JSON.stringify({ autopay_min_recharge_amount: String(Math.round(Number(normalizedAmount) * 1e6)) }),
       });
       setMinRechargeAmount(result.autopay_min_recharge_amount || normalizedAmount);
       setMinRechargeStatus("Saved.");
@@ -140,7 +140,7 @@ export default function SettingsView({
       >
         <div className="settings-owner-panel">
           <p className="settings-field-label">Current minimum</p>
-          <strong>{account?.autopay_min_recharge_amount || "0.01"} USDC</strong>
+          <strong>{account?.autopay_min_recharge_amount ? `${(Number(account.autopay_min_recharge_amount) / 1e6).toFixed(2)}` : "0.01"} USDC</strong>
           <div className="settings-actions">
             <button
               type="button"
@@ -217,7 +217,7 @@ export default function SettingsView({
         <div className="settings-dialog-content">
           <div className="settings-owner-panel">
             <p className="settings-field-label">Current minimum</p>
-            <strong>{account?.autopay_min_recharge_amount || "0.01"} USDC</strong>
+            <strong>{account?.autopay_min_recharge_amount ? `${(Number(account.autopay_min_recharge_amount) / 1e6).toFixed(2)}` : "0.01"} USDC</strong>
           </div>
 
           <form className="settings-rebind-form" onSubmit={saveMinRechargeAmount}>

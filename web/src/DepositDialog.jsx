@@ -113,7 +113,7 @@ export default function DepositDialog({
       const quote = await request("/api/deposits/quote", {
         method: "POST",
         body: JSON.stringify({
-          amount: amount.trim(),
+          amount: String(Math.round(Number(amount.trim()) * 1e6)),
           autopay_url: autopayUrl?.trim() || undefined,
         }),
       });
@@ -241,7 +241,7 @@ export default function DepositDialog({
         const quote = await request("/api/deposits/quote", {
           method: "POST",
           body: JSON.stringify({
-            amount: amount.trim(),
+            amount: String(Math.round(Number(amount.trim()) * 1e6)),
             autopay_url: autopayUrl?.trim() || undefined,
           }),
         });

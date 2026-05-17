@@ -1,6 +1,6 @@
 import { base64UrlRandom, makeId } from "./crypto";
 import { HttpError } from "./http";
-import { parseMoney } from "./money";
+import { parsePositiveInt } from "./money";
 
 export async function createApiKey(): Promise<{ id: string; secret: string; prefix: string; keySuffix: string }> {
   const id = makeId("key");
@@ -47,7 +47,7 @@ export function normalizeApiKeySpendLimit(value: unknown): number | null {
   if (typeof value !== "string") {
     throw new HttpError(400, "invalid_api_key_spend_limit", "API key spend limit must be a decimal amount.");
   }
-  const limit = parseMoney(value);
+  const limit = parseInt(String(value), 10);
   if (limit <= 0) {
     throw new HttpError(400, "invalid_api_key_spend_limit", "API key spend limit must be greater than zero.");
   }

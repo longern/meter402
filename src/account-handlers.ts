@@ -15,7 +15,7 @@ import {
   readJsonObject,
   readOptionalJsonObject,
 } from "./http";
-import { formatMoney, parseMoney } from "./money";
+import { parsePositiveInt } from "./money";
 import { serializeExpiredSessionCookie } from "./session";
 import {
   signOwnerRebindChallengeState,
@@ -64,13 +64,11 @@ export async function handleGetAccount(
     account_id: account.id,
     status: account.status,
     autopay_url: account.autopay_url || "",
-    deposit_balance: formatMoney(account.deposit_balance),
-    unpaid_invoice_total: formatMoney(account.unpaid_invoice_total),
+    deposit_balance: account.deposit_balance,
+    unpaid_invoice_total: account.unpaid_invoice_total,
     concurrency_limit: account.concurrency_limit,
-    min_deposit_required: formatMoney(account.min_deposit_required),
-    autopay_min_recharge_amount: formatMoney(
-      account.autopay_min_recharge_amount,
-    ),
+    min_deposit_required: account.min_deposit_required,
+    autopay_min_recharge_amount: account.autopay_min_recharge_amount,
   });
 }
 
@@ -80,10 +78,11 @@ export async function handleUpdateAccount(
 ): Promise<Response> {
   const account = await requireAccountFromSession(request, env);
   const body = await readJsonObject(request);
-  const newAmount = parseMoney(
+  const newAmount = parseInt(
     String(
       body.autopay_min_recharge_amount ?? body.autopayMinRechargeAmount ?? "0",
     ),
+    10,
   );
   if (newAmount < 10_000) {
     return errorResponse(
@@ -102,7 +101,7 @@ export async function handleUpdateAccount(
 
   return jsonResponse({
     account_id: account.id,
-    autopay_min_recharge_amount: formatMoney(newAmount),
+    autopay_min_recharge_amount: newAmount,
     updated_at: now,
   });
 }
@@ -500,7 +499,7 @@ export async function handleListInvoices(
   return jsonResponse({
     invoices: rows.results.map((row) => ({
       ...row,
-      amount_due: formatMoney(row.amount_due),
+      amount_due: row.amount_due,
     })),
   });
 }
@@ -543,7 +542,7 @@ export async function handleListDeposits(
     }
     return {
       id: row.id,
-      amount: formatMoney(row.amount),
+      amount: row.amount,
       currency: row.currency,
       status: row.status,
       tx_hash: row.tx_hash,
@@ -607,7 +606,7 @@ export async function handleListRequests(
       input_tokens: row.input_tokens,
       output_tokens: row.output_tokens,
       total_tokens: row.total_tokens,
-      final_cost: row.final_cost == null ? null : formatMoney(row.final_cost),
+      final_cost: row.final_cost == null ? null : row.final_cost,
       error_code: row.error_code,
       started_at: row.started_at,
       completed_at: row.completed_at,
@@ -618,7 +617,7 @@ export async function handleListRequests(
             amount_due:
               row.invoice_amount_due == null
                 ? null
-                : formatMoney(row.invoice_amount_due),
+                : row.invoice_amount_due,
           }
         : null,
     })),

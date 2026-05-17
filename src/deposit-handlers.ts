@@ -10,7 +10,7 @@ import {
   readJsonObject,
   requireString,
 } from "./http";
-import { formatMoney, parseMoney, parsePositiveInt } from "./money";
+import { parsePositiveInt } from "./money";
 import { requireSession } from "./session";
 import {
   signDepositIntent,
@@ -50,8 +50,9 @@ export async function handleDepositQuote(
       : "";
   const autopayUrl = account?.autopay_url || requestedAutopayUrl;
   const defaultMinDeposit = await getSettingWithFallback(env.DB, "default_min_deposit", env.DEFAULT_MIN_DEPOSIT);
-  const amount = parseMoney(
+  const amount = parseInt(
     String(body.amount ?? defaultMinDeposit),
+    10,
   );
   if (amount <= 0) {
     return errorResponse(
@@ -114,7 +115,7 @@ export async function handleDepositQuote(
 
   return jsonResponse({
     payment_id: paymentId,
-    amount: formatMoney(amount),
+    amount: amount,
     currency: paymentCurrency,
     payment_requirement: requirement,
     authorization: {
@@ -203,7 +204,7 @@ export async function handleDepositSettle(
     if (account) {
       return jsonResponse({
         account_id: account.id,
-        deposit_balance: formatMoney(account.deposit_balance),
+        deposit_balance: account.deposit_balance,
         owner_address: account.owner_address,
         message: "This deposit was already settled.",
       });
@@ -374,7 +375,7 @@ export async function handleDepositSettle(
 
   const minDepositStr = await getSettingWithFallback(env.DB, "default_min_deposit", env.DEFAULT_MIN_DEPOSIT);
   const concurrencyLimitStr = await getSettingWithFallback(env.DB, "default_concurrency_limit", env.DEFAULT_CONCURRENCY_LIMIT);
-  const minDeposit = parseMoney(minDepositStr);
+  const minDeposit = parseInt(minDepositStr, 10);
   const concurrencyLimit = parsePositiveInt(
     concurrencyLimitStr,
     8,
@@ -429,7 +430,7 @@ export async function handleDepositSettle(
 
     return jsonResponse({
       account_id: existingAccount.id,
-      deposit_balance: formatMoney(newBalance),
+      deposit_balance: newBalance,
       tx_hash: settlement.txHash,
       payer_address: settlement.payerAddress,
       message: "Deposit topped up successfully.",
@@ -510,7 +511,7 @@ export async function handleDepositSettle(
     account_id: accountId,
     api_key: apiKey.secret,
     api_key_suffix: apiKey.keySuffix,
-    deposit_balance: formatMoney(quote.amount),
+    deposit_balance: quote.amount,
     tx_hash: settlement.txHash,
     payer_address: settlement.payerAddress,
     message: "Store this API key now. It cannot be shown again.",
@@ -531,7 +532,7 @@ export async function handleDepositIntent(
   const accept = quote.payment_requirement.accepts[0];
   return jsonResponse({
     payment_id: quote.payment_id,
-    amount: formatMoney(quote.amount),
+    amount: quote.amount,
     currency: quote.currency,
     payment_requirement: quote.payment_requirement,
     authorization: {
@@ -685,7 +686,7 @@ export async function handleDepositAutopayComplete(
             : undefined,
       paymentId,
       status: "settled",
-      amount: formatMoney(quote.amount),
+      amount: quote.amount,
       txHash:
         typeof (settlement as Record<string, unknown>).tx_hash === "string"
           ? ((settlement as Record<string, unknown>).tx_hash as string)

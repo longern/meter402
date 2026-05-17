@@ -3,7 +3,7 @@ import { requireSession } from "./session";
 import type { Env } from "./types";
 import { isAdminWallet } from "./accounts";
 import { makeId } from "./crypto";
-import { parseMoney, parsePositiveInt } from "./money";
+import { parsePositiveInt } from "./money";
 import { getSettingWithFallback, listSettings, setSetting, ensureSettingsDefaults } from "./settings";
 
 export async function requireAdmin(
@@ -50,7 +50,7 @@ export async function handleAdminCreateAccount(
   const concurrencyLimitStr = await getSettingWithFallback(env.DB, "default_concurrency_limit", env.DEFAULT_CONCURRENCY_LIMIT);
   const minDepositStr = await getSettingWithFallback(env.DB, "default_min_deposit", env.DEFAULT_MIN_DEPOSIT);
   const concurrencyLimit = parsePositiveInt(concurrencyLimitStr, 3);
-  const minDepositRequired = parseMoney(minDepositStr);
+  const minDepositRequired = parseInt(minDepositStr, 10);
 
   await env.DB.prepare(
     `INSERT INTO meteria402_accounts

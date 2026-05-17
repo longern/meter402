@@ -440,13 +440,20 @@ function AdminDataTable({ columns, rows, total, t }) {
 }
 
 function AdminSettingsPanel({ settings, loading, onSave, t }) {
+  const MONEY_KEYS = ["default_min_deposit", "default_autopay_min_recharge"];
   const [form, setForm] = useState({});
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState("");
 
   useEffect(() => {
     if (settings) {
-      setForm({ ...settings });
+      const displayForm = { ...settings };
+      for (const key of MONEY_KEYS) {
+        if (displayForm[key] != null && displayForm[key] !== "") {
+          displayForm[key] = String(Number(displayForm[key]) / 1e6);
+        }
+      }
+      setForm(displayForm);
     }
   }, [settings]);
 
@@ -455,7 +462,13 @@ function AdminSettingsPanel({ settings, loading, onSave, t }) {
     setSaving(true);
     setSavedMsg("");
     try {
-      await onSave(form);
+      const patch = { ...form };
+      for (const key of MONEY_KEYS) {
+        if (patch[key] != null && patch[key] !== "") {
+          patch[key] = String(Math.round(Number(patch[key]) * 1e6));
+        }
+      }
+      await onSave(patch);
       setSavedMsg(t("Saved"));
       setTimeout(() => setSavedMsg(""), 2000);
     } catch (err) {

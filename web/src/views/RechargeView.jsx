@@ -5,7 +5,7 @@ import DataList, { DataListItem } from "../DataList";
 import Modal from "../Modal";
 import DepositDialog from "../DepositDialog";
 import { RefreshIcon } from "../icons";
-import { formatDateTime, shortAddress } from "../utils";
+import { formatDateTime, shortAddress, formatMoneyCompact } from "../utils";
 
 export default function RechargeView({
   account,
@@ -117,9 +117,9 @@ export default function RechargeView({
         {account ? (
           <div className="balance-panel">
             <span className="balance-label">{t("Deposit Balance")}</span>
-            <span className="balance-value">{account.deposit_balance} USDC</span>
+            <span className="balance-value">{formatMoneyCompact(account.deposit_balance)}</span>
             <span className="balance-label">{t("Unpaid Invoices")}</span>
-            <span className="balance-value">{account.unpaid_invoice_total} USDC</span>
+            <span className="balance-value">{formatMoneyCompact(account.unpaid_invoice_total)}</span>
             <span className="balance-label">{t("Status")}</span>
             <span className="balance-value">{t(account.status)}</span>
           </div>
@@ -261,7 +261,7 @@ export default function RechargeView({
                 <tbody>
                   {deposits.map((item) => (
                     <tr key={item.id}>
-                      <td><strong>{item.amount} {item.currency}</strong></td>
+                      <td><strong>{formatMoneyCompact(item.amount)}</strong></td>
                       <td>Base</td>
                       <td className="mono">{item.payer_address ? shortAddress(item.payer_address) : "--"}</td>
                       <td>{renderDepositStatus(item.status)}</td>
@@ -293,7 +293,7 @@ export default function RechargeView({
                   </div>
                   <div className="deposit-mobile-side">
                     <span className="deposit-mobile-amount">
-                      <span>{item.amount}</span>
+                      <span>{formatMoneyCompact(item.amount)}</span>
                       <span>{item.currency}</span>
                     </span>
                     {renderDepositExplorerLink(item)}

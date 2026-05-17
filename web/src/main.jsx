@@ -246,8 +246,8 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
       const json = await request("/api/autopay/capabilities", {
         method: "POST",
         body: JSON.stringify({
-          total_budget: capTotalBudget.trim(),
-          max_single_amount: capMaxSingleAmount.trim(),
+          total_budget: String(Math.round(Number(capTotalBudget.trim()) * 1e6)),
+          max_single_amount: String(Math.round(Number(capMaxSingleAmount.trim()) * 1e6)),
           ttl_days: capTtlDays,
           autopay_url: account?.autopay_url || undefined,
         }),
@@ -275,8 +275,8 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
         {
           poll_token: json.poll_token,
           autopay_url: json.autopay_url,
-          total_budget: capTotalBudget.trim(),
-          max_single_amount: capMaxSingleAmount.trim(),
+          total_budget: String(Math.round(Number(capTotalBudget.trim()) * 1e6)),
+          max_single_amount: String(Math.round(Number(capMaxSingleAmount.trim()) * 1e6)),
         },
         json.websocket_uri_complete,
         signal,
@@ -382,7 +382,7 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
         body: JSON.stringify({
           name: newKeyName.trim() || undefined,
           expires_at: apiKeyDurationToIso(newKeyDuration),
-          spend_limit: newKeySpendLimit.trim() || undefined,
+          spend_limit: newKeySpendLimit.trim() ? String(Math.round(Number(newKeySpendLimit.trim()) * 1e6)) : undefined,
         }),
       });
       if (json.api_key) {
