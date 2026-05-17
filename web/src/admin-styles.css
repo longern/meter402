@@ -5,22 +5,6 @@
   margin: 8px 0;
 }
 
-.admin-nav {
-  color: #6b7280;
-  font-size: 14px;
-  font-weight: 750;
-  border-radius: 6px;
-  padding: 10px 12px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.admin-nav:hover {
-  background: #f3f4f6;
-  color: #111827;
-}
-
 .admin-sidebar {
   display: flex;
   flex-direction: column;
@@ -28,34 +12,41 @@
 
 .admin-identity {
   padding: 0 12px;
-  margin-bottom: 12px;
+  margin-bottom: 16px;
   font-size: 13px;
-  color: #6b7280;
+  color: #374151;
   font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .admin-sidebar-footer {
   margin-top: auto;
-  padding: 16px 12px 0;
+  padding: 20px 12px 0;
   display: grid;
-  gap: 8px;
+  gap: 4px;
 }
 
 .admin-sidebar-footer .text-button {
-  color: #6b7280;
-  font-size: 13px;
-  font-weight: 650;
-  padding: 8px 0;
+  color: #374151;
+  font-size: 14px;
+  font-weight: 750;
+  padding: 10px 12px;
   text-align: left;
   background: none;
   border: none;
   cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  border-radius: 6px;
 }
 
 .admin-sidebar-footer .text-button:hover {
+  background: #f3f4f6;
   color: #111827;
 }
 
@@ -64,7 +55,7 @@
   font-size: 14px;
 }
 
-.admin-nav .nav-icon {
+.console-nav .nav-icon {
   font-size: 15px;
   line-height: 1;
 }

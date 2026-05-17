@@ -106,7 +106,7 @@ export default function AdminConsole({ identity, onSessionChange }) {
           <span>{shortAddress(identity.owner)}</span>
         </div>
 
-        <nav className="console-nav admin-nav" aria-label="Admin navigation">
+        <nav className="console-nav" aria-label="Admin navigation">
           {adminNavItems.map((item) => (
             <a
               key={item.view}
