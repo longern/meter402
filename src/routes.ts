@@ -51,6 +51,7 @@ export type RouteHandlers = {
   handleCreateAutopayCapability: Handler;
   handleRevokeAutopayCapability: IdHandler;
   handleCompleteAutopayCapability: IdHandler;
+  handleAdminCreateAccount: Handler;
   handleAdminListAccounts: Handler;
   handleAdminListApiKeys: Handler;
   handleAdminListDeposits: Handler;
@@ -307,6 +308,9 @@ async function dispatchAdminRoute(
 
   if (method === "GET" && pathname === "/api/admin/stats") {
     return handlers.handleAdminStats(request, env);
+  }
+  if (method === "POST" && pathname === "/api/admin/accounts") {
+    return handlers.handleAdminCreateAccount(request, env);
   }
   if (method === "GET" && pathname === "/api/admin/accounts") {
     return handlers.handleAdminListAccounts(request, env);

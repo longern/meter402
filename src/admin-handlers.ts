@@ -2,6 +2,8 @@ import { errorResponse, HttpError, jsonResponse } from "./http";
 import { requireSession } from "./session";
 import type { Env } from "./types";
 import { isAdminWallet } from "./accounts";
+import { makeId } from "./crypto";
+import { parseMoney, parsePositiveInt } from "./money";
 
 export async function requireAdmin(
   request: Request,
@@ -12,6 +14,55 @@ export async function requireAdmin(
     throw new HttpError(403, "forbidden", "Admin access required.");
   }
   return { owner: session.owner };
+}
+
+export async function handleAdminCreateAccount(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  await requireAdmin(request, env);
+
+  const body = await request.json<{ owner_address?: unknown }>();
+  const rawAddress = body?.owner_address;
+  if (!rawAddress || typeof rawAddress !== "string" || !rawAddress.trim()) {
+    throw new HttpError(400, "missing_owner_address", "Owner address is required.");
+  }
+
+  const ownerAddress = rawAddress.trim().toLowerCase();
+  if (!/^0x[0-9a-f]{40}$/.test(ownerAddress)) {
+    throw new HttpError(400, "invalid_address", "Invalid wallet address. Must be a 0x-prefixed 40-hex EVM address.");
+  }
+
+  const existing = await env.DB.prepare(
+    `SELECT id FROM meteria402_accounts WHERE lower(owner_address) = ?`,
+  )
+    .bind(ownerAddress)
+    .first<{ id: string }>();
+
+  if (existing) {
+    throw new HttpError(409, "account_exists", "An account already exists for this wallet address.");
+  }
+
+  const now = new Date().toISOString();
+  const accountId = makeId("acct");
+  const concurrencyLimit = parsePositiveInt(env.DEFAULT_CONCURRENCY_LIMIT || "3", 3);
+  const minDepositRequired = parseMoney(env.DEFAULT_MIN_DEPOSIT || "5.00");
+
+  await env.DB.prepare(
+    `INSERT INTO meteria402_accounts
+     (id, status, owner_address, autopay_url, deposit_balance, unpaid_invoice_total,
+      concurrency_limit, min_deposit_required, refund_address, autopay_min_recharge_amount, created_at, updated_at)
+     VALUES (?, 'active', ?, NULL, 0, 0, ?, ?, NULL, 10000, ?, ?)`,
+  ).bind(accountId, ownerAddress, concurrencyLimit, minDepositRequired, now, now);
+
+  return jsonResponse({
+    id: accountId,
+    status: "active",
+    owner_address: ownerAddress,
+    deposit_balance: 0,
+    unpaid_invoice_total: 0,
+    created_at: now,
+  });
 }
 
 export async function handleAdminListAccounts(

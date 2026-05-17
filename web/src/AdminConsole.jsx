@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import "./admin-styles.css";
 import { useI18n } from "./i18n";
 import { shortAddress, readableError, formatMoneyCompact } from "./utils";
+import Modal from "./Modal";
 
 export default function AdminConsole({ identity, onSessionChange }) {
   const { t } = useI18n();
@@ -15,6 +16,10 @@ export default function AdminConsole({ identity, onSessionChange }) {
   const [requests, setRequests] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [createOpen, setCreateOpen] = useState(false);
+  const [newOwner, setNewOwner] = useState("");
+  const [createStatus, setCreateStatus] = useState("");
+  const [creating, setCreating] = useState(false);
 
   const adminNavItems = [
     { view: "dashboard", label: t("Dashboard"), icon: "📊" },
@@ -92,6 +97,34 @@ export default function AdminConsole({ identity, onSessionChange }) {
     fetch("/api/logout", { method: "POST" }).catch(() => {});
     onSessionChange(null);
     window.location.assign("/login");
+  }
+
+  async function createAccount(event) {
+    event.preventDefault();
+    setCreateStatus("");
+    const address = newOwner.trim();
+    if (!address) {
+      setCreateStatus(t("Wallet Address") + " is required.");
+      return;
+    }
+    setCreating(true);
+    try {
+      await request("/api/admin/accounts", {
+        method: "POST",
+        body: JSON.stringify({ owner_address: address }),
+      });
+      setNewOwner("");
+      setCreateOpen(false);
+      if (activeView === "accounts") {
+        setLoading(true);
+        await loadAccounts();
+        setLoading(false);
+      }
+    } catch (err) {
+      setCreateStatus(readableError(err));
+    } finally {
+      setCreating(false);
+    }
   }
 
   return (
@@ -202,18 +235,33 @@ export default function AdminConsole({ identity, onSessionChange }) {
         )}
 
         {activeView === "accounts" && accounts && (
-          <AdminDataTable
-            columns={[
-              { key: "id", label: t("ID"), width: "200px" },
-              { key: "owner_address", label: t("Owner"), formatter: (v) => shortAddress(v) },
-              { key: "status", label: t("Status") },
-              { key: "deposit_balance", label: t("Deposit"), formatter: (v) => formatMoneyCompact(v) },
-              { key: "unpaid_invoice_total", label: t("Unpaid"), formatter: (v) => formatMoneyCompact(v) },
-              { key: "created_at", label: t("Created") },
-            ]}
-            rows={accounts.accounts || []}
-            total={accounts.total}
-          />
+          <>
+            <div className="admin-table-actions">
+              <button
+                type="button"
+                className="primary"
+                onClick={() => {
+                  setNewOwner("");
+                  setCreateStatus("");
+                  setCreateOpen(true);
+                }}
+              >
+                + {t("Add User")}
+              </button>
+            </div>
+            <AdminDataTable
+              columns={[
+                { key: "id", label: t("ID"), width: "200px" },
+                { key: "owner_address", label: t("Owner"), formatter: (v) => shortAddress(v) },
+                { key: "status", label: t("Status") },
+                { key: "deposit_balance", label: t("Deposit"), formatter: (v) => formatMoneyCompact(v) },
+                { key: "unpaid_invoice_total", label: t("Unpaid"), formatter: (v) => formatMoneyCompact(v) },
+                { key: "created_at", label: t("Created") },
+              ]}
+              rows={accounts.accounts || []}
+              total={accounts.total}
+            />
+          </>
         )}
 
         {activeView === "api-keys" && apiKeys && (
@@ -275,6 +323,43 @@ export default function AdminConsole({ identity, onSessionChange }) {
             total={requests.total}
           />
         )}
+        <Modal
+          open={createOpen}
+          onClose={() => {
+            if (!creating) setCreateOpen(false);
+          }}
+          title={t("Create Account")}
+        >
+          <form onSubmit={createAccount}>
+            <div className="admin-form-group">
+              <label htmlFor="new-owner-address">{t("Wallet Address")}</label>
+              <input
+                id="new-owner-address"
+                type="text"
+                value={newOwner}
+                placeholder="0x..."
+                autoComplete="off"
+                spellCheck="false"
+                onChange={(e) => setNewOwner(e.target.value)}
+                disabled={creating}
+              />
+              {createStatus && <p className="form-status">{createStatus}</p>}
+            </div>
+            <div className="admin-form-actions">
+              <button
+                type="button"
+                className="secondary"
+                disabled={creating}
+                onClick={() => setCreateOpen(false)}
+              >
+                {t("Cancel")}
+              </button>
+              <button type="submit" className="primary" disabled={creating || !newOwner.trim()}>
+                {creating ? "..." : t("Create")}
+              </button>
+            </div>
+          </form>
+        </Modal>
       </main>
     </div>
   );

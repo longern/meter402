@@ -14,6 +14,7 @@ handleReconcileRequests,
 handleUpdateAccount,
 } from "./account-handlers";
 import {
+handleAdminCreateAccount,
 handleAdminListAccounts,
 handleAdminListApiKeys,
 handleAdminListDeposits,
@@ -93,6 +94,7 @@ export const routeHandlers: RouteHandlers = {
   handleCreateAutopayCapability,
   handleRevokeAutopayCapability,
   handleCompleteAutopayCapability,
+  handleAdminCreateAccount,
   handleAdminListAccounts,
   handleAdminListApiKeys,
   handleAdminListDeposits,
