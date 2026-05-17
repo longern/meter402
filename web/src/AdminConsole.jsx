@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import "./admin-styles.css";
 import { useI18n } from "./i18n";
-import { shortAddress, readableError } from "./utils";
+import { shortAddress, readableError, formatMoneyCompact } from "./utils";
 
 export default function AdminConsole({ identity, onSessionChange }) {
   const { t } = useI18n();
@@ -186,12 +186,12 @@ export default function AdminConsole({ identity, onSessionChange }) {
                 <span className="stat-label">{t("Active Keys")}</span>
               </div>
               <div className="stat-card">
-                <span className="stat-value">{stats.total_deposits?.toFixed(2) || "0.00"}</span>
-                <span className="stat-label">{t("Total Deposits")} (USDC)</span>
+                <span className="stat-value">{formatMoneyCompact(stats.total_deposits)}</span>
+                <span className="stat-label">{t("Total Deposits")}</span>
               </div>
               <div className="stat-card">
-                <span className="stat-value">{stats.total_unpaid?.toFixed(2) || "0.00"}</span>
-                <span className="stat-label">{t("Total Unpaid")} (USDC)</span>
+                <span className="stat-value">{formatMoneyCompact(stats.total_unpaid)}</span>
+                <span className="stat-label">{t("Total Unpaid")}</span>
               </div>
               <div className="stat-card">
                 <span className="stat-value">{stats.requests_24h}</span>
@@ -207,8 +207,8 @@ export default function AdminConsole({ identity, onSessionChange }) {
               { key: "id", label: t("ID"), width: "200px" },
               { key: "owner_address", label: t("Owner"), formatter: (v) => shortAddress(v) },
               { key: "status", label: t("Status") },
-              { key: "deposit_balance", label: t("Deposit"), formatter: (v) => v?.toFixed(2) },
-              { key: "unpaid_invoice_total", label: t("Unpaid"), formatter: (v) => v?.toFixed(2) },
+              { key: "deposit_balance", label: t("Deposit"), formatter: (v) => formatMoneyCompact(v) },
+              { key: "unpaid_invoice_total", label: t("Unpaid"), formatter: (v) => formatMoneyCompact(v) },
               { key: "created_at", label: t("Created") },
             ]}
             rows={accounts.accounts || []}
@@ -222,8 +222,8 @@ export default function AdminConsole({ identity, onSessionChange }) {
               { key: "id", label: t("ID"), width: "200px" },
               { key: "owner_address", label: t("Owner"), formatter: (v) => shortAddress(v) },
               { key: "name", label: t("Name") },
-              { key: "spend_limit", label: t("Limit"), formatter: (v) => v?.toFixed(2) || "∞" },
-              { key: "spent_amount", label: t("Spent"), formatter: (v) => v?.toFixed(2) },
+              { key: "spend_limit", label: t("Limit"), formatter: (v) => v ? formatMoneyCompact(v) : "∞" },
+              { key: "spent_amount", label: t("Spent"), formatter: (v) => formatMoneyCompact(v) },
               { key: "created_at", label: t("Created") },
             ]}
             rows={apiKeys.api_keys || []}
@@ -236,7 +236,7 @@ export default function AdminConsole({ identity, onSessionChange }) {
             columns={[
               { key: "id", label: t("ID"), width: "200px" },
               { key: "owner_address", label: t("Owner"), formatter: (v) => shortAddress(v) },
-              { key: "amount", label: t("Amount"), formatter: (v) => v?.toFixed(2) },
+              { key: "amount", label: t("Amount"), formatter: (v) => formatMoneyCompact(v) },
               { key: "status", label: t("Status") },
               { key: "settled_at", label: t("Settled") },
               { key: "created_at", label: t("Created") },
@@ -251,7 +251,7 @@ export default function AdminConsole({ identity, onSessionChange }) {
             columns={[
               { key: "id", label: t("ID"), width: "200px" },
               { key: "owner_address", label: t("Owner"), formatter: (v) => shortAddress(v) },
-              { key: "amount", label: t("Amount"), formatter: (v) => v?.toFixed(2) },
+              { key: "amount", label: t("Amount"), formatter: (v) => formatMoneyCompact(v) },
               { key: "status", label: t("Status") },
               { key: "settled_at", label: t("Settled") },
               { key: "created_at", label: t("Created") },
@@ -268,7 +268,7 @@ export default function AdminConsole({ identity, onSessionChange }) {
               { key: "owner_address", label: t("Owner"), formatter: (v) => shortAddress(v) },
               { key: "provider", label: t("Provider") },
               { key: "model", label: t("Model") },
-              { key: "cost", label: t("Cost"), formatter: (v) => v?.toFixed(6) },
+              { key: "cost", label: t("Cost"), formatter: (v) => formatMoneyCompact(v) },
               { key: "created_at", label: t("Created") },
             ]}
             rows={requests.requests || []}
