@@ -23,6 +23,7 @@ import {
   consoleViewSubtitle,
 } from "./utils";
 import AdminConsole from "./AdminConsole";
+import "./styles.css";
 
 const DEFAULT_AUTOPAY_URL = import.meta.env.VITE_DEFAULT_AUTOPAY_URL || "";
 
