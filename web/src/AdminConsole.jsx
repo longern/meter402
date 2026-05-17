@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import "./admin-styles.css";
 import { useI18n } from "./i18n";
 import { shortAddress, readableError } from "./utils";
 
