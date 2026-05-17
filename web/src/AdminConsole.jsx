@@ -201,11 +201,6 @@ export default function AdminConsole({ identity, onSessionChange }) {
         </div>
 
         {error && <div className="admin-error-banner">{error}</div>}
-        {loading && (
-          <div className="admin-loading">
-            <span className="spinner" />
-          </div>
-        )}
 
         {activeView === "dashboard" && stats && (
           <div className="admin-dashboard">
@@ -253,7 +248,11 @@ export default function AdminConsole({ identity, onSessionChange }) {
                 + {t("Add User")}
               </button>
             </div>
-            {accounts && (
+            {loading ? (
+              <div className="admin-loading">
+                <span className="spinner" />
+              </div>
+            ) : accounts ? (
               <AdminDataTable
                 columns={[
                   { key: "id", label: t("ID"), width: "200px" },
@@ -266,7 +265,7 @@ export default function AdminConsole({ identity, onSessionChange }) {
                 rows={accounts.accounts || []}
                 total={accounts.total}
               />
-            )}
+            ) : null}
           </>
         )}
 
