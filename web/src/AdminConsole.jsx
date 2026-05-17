@@ -29,7 +29,7 @@ export default function AdminConsole({ identity, onSessionChange }) {
     { view: "deposits", label: t("Deposits"), icon: "💰" },
     { view: "invoices", label: t("Invoices"), icon: "📄" },
     { view: "requests", label: t("Requests"), icon: "📡" },
-    { view: "settings", label: t("Settings"), icon: "⚙️" },
+    { view: "settings", label: t("Site Settings"), icon: "⚙️" },
   ];
 
   async function request(path, options = {}) {
@@ -492,7 +492,7 @@ function AdminSettingsPanel({ settings, loading, onSave, t }) {
     { key: "default_min_deposit", label: t("Min Deposit"), type: "text", placeholder: "5.00" },
     { key: "default_concurrency_limit", label: t("Concurrency Limit"), type: "number", placeholder: "8" },
     { key: "default_autopay_min_recharge", label: t("Autopay Min Recharge"), type: "text", placeholder: "5.00" },
-    { key: "billing_cost_multiplier", label: t("Cost Multiplier"), type: "text", placeholder: "1.0" },
+    { key: "billing_cost_multiplier", label: t("Cost Multiplier"), type: "text", placeholder: "1.055" },
   ];
 
   return (

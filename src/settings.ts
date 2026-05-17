@@ -4,7 +4,7 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   default_min_deposit: "5000000",
   default_concurrency_limit: "8",
   default_autopay_min_recharge: "5000000",
-  billing_cost_multiplier: "1.0",
+  billing_cost_multiplier: "1.055",
 };
 
 export async function ensureSettingsDefaults(db: D1Database): Promise<void> {
