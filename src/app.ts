@@ -14,6 +14,14 @@ handleReconcileRequests,
 handleUpdateAccount,
 } from "./account-handlers";
 import {
+handleAdminListAccounts,
+handleAdminListApiKeys,
+handleAdminListDeposits,
+handleAdminListInvoices,
+handleAdminListRequests,
+handleAdminStats,
+} from "./admin-handlers";
+import {
 handleCompleteAutopayCapability,
 handleCreateAutopayCapability,
 handleInvoiceAutopayComplete,
@@ -85,6 +93,12 @@ export const routeHandlers: RouteHandlers = {
   handleCreateAutopayCapability,
   handleRevokeAutopayCapability,
   handleCompleteAutopayCapability,
+  handleAdminListAccounts,
+  handleAdminListApiKeys,
+  handleAdminListDeposits,
+  handleAdminListInvoices,
+  handleAdminListRequests,
+  handleAdminStats,
   handleV1Request,
 };
 

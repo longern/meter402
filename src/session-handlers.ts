@@ -1,5 +1,6 @@
 import {
 getAccountByOwner,
+isAdminWallet,
 requireAccountAutopayUrl,
 requireAutopayWalletBalanceEligibility
 } from "./accounts";
@@ -88,6 +89,7 @@ export async function handleGetSession(request: Request, env: Env): Promise<Resp
   return jsonResponse(
     {
       owner: session.owner,
+      is_admin: isAdminWallet(env, session.owner),
       expires_at: new Date(session.expires_at).toISOString(),
     },
     {

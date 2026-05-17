@@ -22,7 +22,7 @@ import {
   getConsoleView,
   consoleViewSubtitle,
 } from "./utils";
-import "./styles.css";
+import AdminConsole from "./AdminConsole";
 
 const DEFAULT_AUTOPAY_URL = import.meta.env.VITE_DEFAULT_AUTOPAY_URL || "";
 
@@ -44,6 +44,18 @@ function App() {
   }
   if (path.startsWith("/console") && !session) {
     return <LoginPage returnTo={window.location.pathname} onSessionChange={setSession} />;
+  }
+  if (path.startsWith("/admin") && !sessionLoaded) {
+    return null;
+  }
+  if (path.startsWith("/admin") && !session) {
+    return <LoginPage returnTo={window.location.pathname} onSessionChange={setSession} />;
+  }
+  if (path.startsWith("/admin") && session?.is_admin) {
+    return <AdminConsole identity={session} onSessionChange={setSession} />;
+  }
+  if (path.startsWith("/admin")) {
+    return <LoginPage returnTo="/console" onSessionChange={setSession} />;
   }
   return <ConsoleApp initialIdentity={session} onSessionChange={setSession} />;
 }
@@ -601,6 +613,8 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
     { href: "/console/settings", view: "settings", label: t("Settings") },
   ];
 
+  const adminNavItem = { href: "/admin", view: "admin", label: t("Admin") };
+
   function closeSidebar() {
     setSidebarOpen(false);
   }
@@ -639,6 +653,21 @@ function ConsoleApp({ initialIdentity, onSessionChange = () => {} }) {
               {item.label}
             </a>
           ))}
+          {identity?.is_admin && (
+            <>
+              <div className="nav-divider" />
+              <a
+                href={adminNavItem.href}
+                className="admin-nav"
+                onClick={(event) => {
+                  event.preventDefault();
+                  window.location.assign("/admin");
+                }}
+              >
+                {adminNavItem.label}
+              </a>
+            </>
+          )}
         </nav>
       </aside>
       <button

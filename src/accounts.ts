@@ -139,6 +139,16 @@ export async function requireAutopayWalletBalanceEligibility(
   return { account, owner };
 }
 
+export function isAdminWallet(env: Env, owner: string): boolean {
+  const adminSet = new Set(
+    (env.ADMIN_WALLETS || "")
+      .split(",")
+      .map((a) => a.trim().toLowerCase())
+      .filter(Boolean),
+  );
+  return adminSet.has(owner.toLowerCase());
+}
+
 function readMeteriaApiKey(request: Request): string | null {
   const auth = request.headers.get("authorization") || "";
   const match = auth.match(/^Bearer\s+(.+)$/i);

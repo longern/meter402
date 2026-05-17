@@ -51,6 +51,12 @@ export type RouteHandlers = {
   handleCreateAutopayCapability: Handler;
   handleRevokeAutopayCapability: IdHandler;
   handleCompleteAutopayCapability: IdHandler;
+  handleAdminListAccounts: Handler;
+  handleAdminListApiKeys: Handler;
+  handleAdminListDeposits: Handler;
+  handleAdminListInvoices: Handler;
+  handleAdminListRequests: Handler;
+  handleAdminStats: Handler;
   handleV1Request: (
     request: Request,
     env: Env,
@@ -87,6 +93,9 @@ export async function dispatchRoute(
 
   const autopayResponse = await dispatchAutopayRoute(request, env, url, handlers);
   if (autopayResponse) return autopayResponse;
+
+  const adminResponse = await dispatchAdminRoute(request, env, url, handlers);
+  if (adminResponse) return adminResponse;
 
   const gatewayRoute = matchGatewayProviderRoute(url.pathname);
   if (gatewayRoute && (method === "GET" || method === "POST")) {
@@ -280,6 +289,39 @@ async function dispatchAutopayRoute(
   }
   if (method === "POST" && action === "complete") {
     return handlers.handleCompleteAutopayCapability(request, env, capabilityId);
+  }
+
+  return null;
+}
+
+async function dispatchAdminRoute(
+  request: Request,
+  env: Env,
+  url: URL,
+  handlers: RouteHandlers,
+): Promise<Response | null> {
+  const { method } = request;
+  const pathname = url.pathname;
+
+  if (!pathname.startsWith("/api/admin/")) return null;
+
+  if (method === "GET" && pathname === "/api/admin/stats") {
+    return handlers.handleAdminStats(request, env);
+  }
+  if (method === "GET" && pathname === "/api/admin/accounts") {
+    return handlers.handleAdminListAccounts(request, env);
+  }
+  if (method === "GET" && pathname === "/api/admin/api-keys") {
+    return handlers.handleAdminListApiKeys(request, env);
+  }
+  if (method === "GET" && pathname === "/api/admin/deposits") {
+    return handlers.handleAdminListDeposits(request, env);
+  }
+  if (method === "GET" && pathname === "/api/admin/invoices") {
+    return handlers.handleAdminListInvoices(request, env);
+  }
+  if (method === "GET" && pathname === "/api/admin/requests") {
+    return handlers.handleAdminListRequests(request, env);
   }
 
   return null;

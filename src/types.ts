@@ -30,6 +30,7 @@ export type Env = {
   METERED_REQUEST_LEASE_SECONDS?: string;
   X402_ASSET_DECIMALS?: string;
   AUTOPAY_REQUESTER_ORIGIN?: string;
+  ADMIN_WALLETS?: string;
   AUTOPAY_REQUESTER_NAME?: string;
   ACCOUNT_GATES: DurableObjectNamespace;
   LOGIN_SESSIONS: DurableObjectNamespace;
