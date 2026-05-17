@@ -264,6 +264,7 @@ export default function AdminConsole({ identity, onSessionChange }) {
                 ]}
                 rows={accounts.accounts || []}
                 total={accounts.total}
+                t={t}
               />
             ) : null}
           </>
@@ -281,6 +282,7 @@ export default function AdminConsole({ identity, onSessionChange }) {
             ]}
             rows={apiKeys.api_keys || []}
             total={apiKeys.total}
+            t={t}
           />
         )}
 
@@ -296,6 +298,7 @@ export default function AdminConsole({ identity, onSessionChange }) {
             ]}
             rows={deposits.deposits || []}
             total={deposits.total}
+            t={t}
           />
         )}
 
@@ -311,6 +314,7 @@ export default function AdminConsole({ identity, onSessionChange }) {
             ]}
             rows={invoices.invoices || []}
             total={invoices.total}
+            t={t}
           />
         )}
 
@@ -326,6 +330,7 @@ export default function AdminConsole({ identity, onSessionChange }) {
             ]}
             rows={requests.requests || []}
             total={requests.total}
+            t={t}
           />
         )}
         <Modal
@@ -370,7 +375,7 @@ export default function AdminConsole({ identity, onSessionChange }) {
   );
 }
 
-function AdminDataTable({ columns, rows, total }) {
+function AdminDataTable({ columns, rows, total, t }) {
   return (
     <>
       <div className="admin-table-header">
