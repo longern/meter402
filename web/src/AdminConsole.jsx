@@ -374,7 +374,7 @@ function AdminDataTable({ columns, rows, total }) {
   return (
     <>
       <div className="admin-table-header">
-        <span className="muted">{total} total</span>
+        <span className="muted">{total} {t("total")}</span>
       </div>
       <div className="admin-table-wrapper">
         <table className="admin-table">
@@ -391,7 +391,7 @@ function AdminDataTable({ columns, rows, total }) {
             {rows.length === 0 && (
               <tr>
                 <td colSpan={columns.length} className="admin-empty">
-                  No data
+                  {t("No data")}
                 </td>
               </tr>
             )}
