@@ -56,8 +56,19 @@
 }
 
 .console-nav .nav-icon {
-  font-size: 15px;
-  line-height: 1;
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  opacity: 0.55;
+  transition: opacity 0.15s ease;
+}
+
+.console-nav a:hover .nav-icon,
+.console-nav a.active .nav-icon {
+  opacity: 0.9;
 }
 
 .console-topbar .back-button {
